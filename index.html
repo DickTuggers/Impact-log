@@ -1,0 +1,1286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Impact Log</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Impact Log">
+<meta name="theme-color" content="#12140F">
+<link rel="apple-touch-icon" id="appleIcon" href="">
+<link rel="icon" id="favIcon" href="">
+<link rel="manifest" id="manifestLink" href="">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#12140F; --panel:#191D14; --panel-2:#1F2418; --border:#333B2A;
+    --text:#EDEAE1; --muted:#8B9184; --amber:#E8A33D; --amber-dim:#8C6A2D;
+    --olive:#7FA65C; --rust:#C1502E;
+    --sans:'Inter',system-ui,-apple-system,sans-serif;
+    --display:'Barlow Condensed',var(--sans);
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:60px;}
+  #app{max-width:520px;margin:0 auto;padding:18px 14px 40px;}
+
+  .hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border);}
+  .hdr h1{font-family:var(--display);font-weight:700;font-size:30px;letter-spacing:0.5px;margin:0;}
+  .hdr .sub{font-family:var(--mono);font-size:11px;color:var(--amber);}
+
+  .panel{position:relative;background:var(--panel);border:1px solid var(--border);padding:16px;margin-bottom:14px;}
+  .panel::before,.panel::after,.panel .bl,.panel .br{content:'';position:absolute;width:9px;height:9px;}
+  .panel::before{top:-1px;left:-1px;border-top:2px solid var(--amber);border-left:2px solid var(--amber);}
+  .panel::after{top:-1px;right:-1px;border-top:2px solid var(--amber);border-right:2px solid var(--amber);}
+  .panel .bl{bottom:-1px;left:-1px;border-bottom:2px solid var(--amber);border-left:2px solid var(--amber);}
+  .panel .br{bottom:-1px;right:-1px;border-bottom:2px solid var(--amber);border-right:2px solid var(--amber);}
+
+  .label{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);margin-bottom:8px;display:block;}
+  .stat-row{display:flex;gap:10px;}
+  .stat{flex:1;text-align:left;}
+  .stat .num{font-family:var(--display);font-size:26px;font-weight:600;line-height:1;}
+  .stat .cap{font-family:var(--mono);font-size:9.5px;color:var(--muted);margin-top:4px;}
+
+  .btn{font-family:var(--sans);font-weight:600;font-size:14.5px;background:var(--amber);color:#161810;border:none;padding:12px 18px;cursor:pointer;width:100%;transition:filter .15s ease;}
+  .btn:active{filter:brightness(0.9);}
+  .btn.secondary{background:transparent;color:var(--text);border:1px solid var(--border);}
+  .btn.ghost{background:transparent;color:var(--muted);border:none;text-decoration:underline;width:auto;padding:6px 0;font-size:13px;}
+  .btn.small{width:auto;padding:8px 14px;font-size:13px;}
+  .btn.danger{background:transparent;color:var(--rust);border:1px solid var(--rust);}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .nav-row{display:flex;gap:8px;margin-bottom:14px;}
+  .nav-row .btn{flex:1;}
+
+  .row-item{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--border);cursor:pointer;}
+  .row-item:last-child{border-bottom:none;}
+  .row-item .t1{font-family:var(--sans);font-weight:600;font-size:14.5px;}
+  .row-item .t2{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;}
+  .row-item .metric{font-family:var(--mono);font-size:15px;color:var(--olive);text-align:right;}
+  .row-item .metric .u{color:var(--muted);font-size:10px;}
+  .empty{font-family:var(--sans);color:var(--muted);font-size:13.5px;padding:14px 0;text-align:center;}
+
+  .flow-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+  .flow-hdr .step-label{font-family:var(--mono);font-size:11px;color:var(--amber);text-transform:uppercase;letter-spacing:1px;}
+  .flow-hdr .close{background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:14px;font-weight:600;cursor:pointer;padding:6px 4px;}
+  .instr{font-size:14px;margin-bottom:12px;line-height:1.45;}
+  .instr b{color:var(--amber);}
+
+  input[type=text], input[type=number], select{width:100%;background:var(--panel-2);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:15px;padding:10px 12px;margin-bottom:10px;}
+  input::placeholder{color:var(--muted);}
+  label.f-label{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;display:block;margin-bottom:6px;}
+
+  .tap-wrap{position:relative;width:100%;max-width:480px;margin:0 auto 12px;user-select:none;}
+  .tap-wrap img{display:block;width:100%;height:auto;}
+  .tap-wrap svg{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+  .upload-box{border:2px dashed var(--border);padding:30px 16px;text-align:center;cursor:pointer;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-bottom:12px;}
+  .upload-box:hover{border-color:var(--amber-dim);}
+
+  .shot-counter{font-family:var(--mono);font-size:13px;color:var(--amber);text-align:center;margin-bottom:10px;}
+  .btn-row{display:flex;gap:8px;margin-top:6px;}
+  .btn-row .btn{flex:1;}
+
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  .legend-item{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;padding:4px 8px;border:1px solid var(--border);}
+  .legend-item.off{opacity:0.35;}
+  .swatch{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+
+  .lib-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);}
+  .lib-item:last-child{border-bottom:none;}
+  .lib-item img{width:52px;height:52px;object-fit:cover;border:1px solid var(--border);}
+  .lib-item .info{flex:1;}
+  .lib-item .info .t1{font-size:13.5px;font-weight:600;}
+  .lib-item .info .t2{font-family:var(--mono);font-size:10.5px;color:var(--muted);}
+
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+  .chip{font-family:var(--mono);font-size:12px;padding:6px 10px;border:1px solid var(--border);color:var(--muted);cursor:pointer;background:transparent;}
+  .chip.active{border-color:var(--amber);color:var(--amber);}
+
+  .adjuster{display:flex;flex-direction:column;align-items:center;gap:6px;margin:4px 0 14px;padding:12px;border:1px solid var(--border);background:var(--panel-2);}
+  .adj-label{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;}
+  .adj-grid{display:grid;grid-template-columns:38px 38px 38px;grid-template-rows:38px 38px 38px;gap:4px;}
+  .adj-btn{background:var(--panel);border:1px solid var(--amber-dim);color:var(--amber);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .adj-btn:active{background:var(--amber);color:#161810;}
+  .adj-dot{display:flex;align-items:center;justify-content:center;color:var(--muted);}
+
+  canvas{max-width:100%;}
+  .trend-empty{font-family:var(--sans);color:var(--muted);font-size:13px;text-align:center;padding:24px 0;}
+  ::selection{background:var(--amber);color:#161810;}
+
+  .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel-2);border:1px solid var(--amber);color:var(--amber);font-family:var(--mono);font-size:12px;padding:8px 16px;opacity:0;transition:all .25s ease;pointer-events:none;z-index:50;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+(function(){
+
+const PALETTE = ['#E8A33D','#7FA65C','#5B8FA6','#C1502E','#A67FA6','#D9C25B','#5BA68C','#C97BA0'];
+const DISPLAY_W = 560;
+const NUDGE = 2; // image-pixel nudge step for fine adjustment
+
+let data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [] };
+let view = { screen:'home' };
+let flow = null;
+let allImpactsFilter = null;
+let rangeMinFilter = null;
+let rangeMaxFilter = null;
+let showAvgCenter = false;
+let charts = {};
+
+const $app = document.getElementById('app');
+
+// ---------- PWA / home-screen setup ----------
+const ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAHQElEQVR4nO2dTY7mJhCGmWj2kaLssxypF32CXCLKSfokfZJRLjEn6EVLWeYIuUEWRMiyXRgbquoteJ9d/+gDiscFHwb7yy+//pwIOeMn7woQXCgHEaEcRIRyEJGv3hVA4fP9dfvjy9uHV01wYOYgIpSDiFAOIkI5iAjlICKUg4hQDiJCOYgI5SAilIOIUA4iQjmICOUgIpSDiHxZcw/p7gZ9CwvexF9CjgcqtDC9LtPKoSSExJSizCaHsRNHZrJkEjncnTgygSWx5QB04khcS6LK0anFscMuNxgPLxGfeLvPn3VSf9/sPuFuNfL/x1Ikkhx3+0O1J7Yf3l6xWIrEkKM9+i5xvytKFEUCLJ83mvHy9oEQ7vZq4M+moTNHS/gQhDhSalVvAngKwc0cl2aApIo6LZWETSGImaNFC5uajCJXuNIuzBQClznqZoTIFhKXlUdLIVhyXJphVhM9AvmBMqysoEWhPsrgDDEQmWMpMwr4KcRfjkoUQs8wWqg30N0PZznqZljWxBFYPzzloBkFTD/c5JDaPP1QIlFpuJcfPnJUzDCuCRpQfjjIQTPq4PhhLQfNaAHED1M5aEY7CH74r3PQDAn3yNjJcaq8e/vBOY2PWfIwkoNmPMbRDws53JeBp8Qgqm53ZRHSxuXum4x7VV/ePlwuMPVDTWgDStyzSfaR1JUDx4zhVx5OK/RqgrLZRwm9bFw+2X3Q0UMxc/imjbvHGipnZaFOSFhGVUsORzOe7StrfFMTwqY1s9jONqxor9DXTyt9vr/ONMqoZA6XtNGpxbN3vHndLbKJsNEKqVewtMuVitBelrDJT+PlsF+uOZZovJ3stDiEOHRikTn0+unz/fXUDKXi6pz6oaeIQTMHy2F5ubgnjCPuKWRsWeqZQ6m3cBLGETM/tJs8Ug6zSwTZjIxj/hhYkG7msOkzNDMyE7Tdf5vgXQK9dL7zAYTuDJPDpuWBzMi4+DGqFMXMMbznwpmR0fZDLw7xhpVMFDMysWpbGCOHwdeHcAN2BYPkMaSIGJkj6ICyJeLkNIYcWyKakQlX8wFyaF8EIS6yB+DHTSVz6F0i4S6+HbEigz6szJo2MuCtQ5djS/S0kQnUil45wN1fnM7eGZ85Bl4ZUGcSB3L33MODjx1CpGGFGEM5iAiuHLOOKRmlkWUsuHIQd7pOvOFv12vn7+//eldhAMcnefQcwpvtOOQD/vr9N+mXf/z4x7w6QIAOK2YTjlMzGv/aCf60A1QOG1r6XtUPcNaVo73Xl/VjXTnIJftHMGAOfsN58N3k25+6T9YDYTsTYuYgIpSDiFAOIkI5iEjXM8H0ls8NFsFufUFVWirVaObATmHmICLrytGeDJa9w7KuHKmt15c1I8HKYXZTqt73qmbg72biLfv/DdjNT1dOGIUuOcZuLfFlvzr+w6kefYz9/gg6rBAEcOXA3wvTA/6EIyHLQdyhHEQE+sH4s44sSmMK3IPxYcdLkrp7J9KwMkfyCNQKdDnmzkzgrVORw+CFnUGJFZkBchi8Kkv1873Ajxv6sHIkbvIIV/MYckR8wuuOiM/ZHSOHwbtnQkSzEYNnfw8pIkbmOBIrecSqbUFRDu3kESXi2gOKXhyGyeHy1ip8P1ymGqNKiTesBPIj4iR0i64csd5aNZYJ2j5SDrMrA+Hd4HUcn5Y2sCD1YcXsfbs4fpiZod3kwXJYDqvG745v4bQCvjHpwWJCqtdh7u+Or5d7Wj294oYD/WD8xyUapxD3hKFUotFXWe2uOo2LgSJSEdpm2Kjf9QiGCi4hk8ptKfrumsTjgvoxi+1sxyGPh/Ay5ZedQaxfsuGWuepoZY7klzwqpe+o7G6/u/Hdt11KpSvKkbz9kCowFvfm6FVgtmFlRwkc95c8QDdzJIDksaPTErSaq9ZHXY6E50ehURTYqmpXzG1YQXiSR+OE1B2vNV+LRTCoQE+DQVSNVkilFUyb0kPjOCjb7QSjHw/wna75bxOkHxLukTGVQ1LePQqAON67KVhnDvrRAoIZyWVYoR91QMxIXnMO+iGBY0ZynJBW/FhTkUrDvRaKPL+tVNq8mh+V9jouITp/laUfCdWM5C5HuvJjbkXqDXS/7eAvR7qKwqx+4O84RNnsk2MhxSv/HiFeQ8DXIgOROQorpJAoZiQ0OVKDH3EVuaw8lBkJZ1jZUh9iUsBR5lJozLbAZY5Cy7Ei/CzSUklMMxJm5ihcppDtX6FCHGh3agXczFFojCBIImmvBrgZCTxzFFpSSGb7P1Cn67bga5GJIUemXZGMqijPslQULTKR5MjcVSTTf/Ig7mmox1gcatIDYZJxSUQtMrHlKABaEteJwiRyFNwtmcCJwmxyFIwtmcmJwrRybDF7FupkLCHHkQe6TK/CkUXlOIJ8yt6LAMvnxAvKQUQoBxGhHESEchARykFEKAcRoRxEhHIQEcpBRCgHEaEcRIRyEBHKQUR4y56IMHMQEcpBRCgHEfkP/tOtOGW+F7EAAAAASUVORK5CYII=";
+function setupHomeScreen(){
+  const iconUrl = 'data:image/png;base64,'+ICON_B64;
+  document.getElementById('appleIcon').href = iconUrl;
+  document.getElementById('favIcon').href = iconUrl;
+  const manifest = {
+    name: "Impact Log", short_name: "Impact Log",
+    start_url: ".", display: "standalone",
+    background_color: "#12140F", theme_color: "#12140F",
+    icons: [{ src: iconUrl, sizes: "180x180", type: "image/png" }]
+  };
+  const blob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
+  document.getElementById('manifestLink').href = URL.createObjectURL(blob);
+}
+setupHomeScreen();
+
+// ---------- toast ----------
+let toastTimer = null;
+function toast(msg){
+  let t = document.getElementById('toastEl');
+  if(!t){ t = document.createElement('div'); t.id='toastEl'; t.className='toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> t.classList.remove('show'), 1400);
+}
+
+// ---------- storage (on-device only) ----------
+async function loadData(){
+  let raw = null;
+  try{ raw = localStorage.getItem('impact-data'); }catch(e){ /* storage blocked */ }
+  if(raw){ data = normalizeData(JSON.parse(raw)); return; }
+
+  let legacyRaw = null;
+  try{ legacyRaw = localStorage.getItem('impact-sessions'); }catch(e){ /* ignore */ }
+  if(legacyRaw){
+    data = migrateLegacy(JSON.parse(legacyRaw));
+    await saveData();
+    return;
+  }
+  data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [] };
+}
+function normalizeData(d){
+  if(!d.bows) d.bows = [];
+  if(!d.arrowSetups) d.arrowSetups = [];
+  (d.sessions||[]).forEach(s=>{
+    if(s.bowId===undefined) s.bowId = (s.groupings&&s.groupings[0]&&s.groupings[0].bowId) || null;
+    if(s.arrowSetupId===undefined) s.arrowSetupId = (s.groupings&&s.groupings[0]&&s.groupings[0].arrowSetupId) || null;
+  });
+  return d;
+}
+function migrateLegacy(oldSessions){
+  const targetLibrary = [];
+  const sessions = (oldSessions||[]).map(s=>{
+    const assetId = 'legacy-'+s.id;
+    targetLibrary.push({ id:assetId, name:s.label||('Target — '+fmtDate(s.date)), dataUrl:s.targetImage, imgW:s.imgW, imgH:s.imgH, pixelsPerInch:s.pixelsPerInch, centerPx:s.centerPx, createdAt:s.date });
+    return { id:s.id, date:s.date, label:s.label||'', targetId:assetId, groupings:[{ id:uid(), distance:null, bowId:null, arrowSetupId:null, impacts:s.impacts||[], createdAt:s.date }] };
+  });
+  return { targetLibrary, sessions, bows: [], arrowSetups: [] };
+}
+async function saveData(){
+  const json = JSON.stringify(data);
+  try{
+    localStorage.setItem('impact-data', json);
+    toast('Saved ✓');
+  }catch(e){
+    console.error('save failed', e);
+    alert("Couldn't save on this device (storage may be full or blocked). Use Export Backup right away so you don't lose this data.");
+  }
+}
+
+// ---------- backup ----------
+function exportData(){
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'impact-log-backup-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+async function handleImportFile(e){
+  const file = e.target.files[0]; if(!file) return;
+  try{
+    const parsed = JSON.parse(await file.text());
+    if(!parsed || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.targetLibrary)) throw new Error('bad shape');
+    const newSessions = parsed.sessions.filter(s=> !data.sessions.some(x=>x.id===s.id));
+    const newAssets = parsed.targetLibrary.filter(a=> !data.targetLibrary.some(x=>x.id===a.id));
+    if(!confirm(`Add ${newSessions.length} session(s) and ${newAssets.length} target(s) from this file to your current data? (Nothing existing will be removed.)`)) { e.target.value=''; return; }
+    data.sessions = data.sessions.concat(newSessions);
+    data.targetLibrary = data.targetLibrary.concat(newAssets);
+    await saveData();
+    view = {screen:'home'};
+    render();
+  }catch(err){ alert("That file doesn't look like a valid Impact Log backup."); }
+  e.target.value = '';
+}
+
+// ---------- helpers ----------
+function uid(){ return 'id'+Date.now()+Math.random().toString(36).slice(2,7); }
+function fmt(n,d=2){ return Number(n).toFixed(d); }
+function fmtDate(iso){ return new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+function getAsset(id){ return data.targetLibrary.find(a=>a.id===id); }
+function getSession(id){ return data.sessions.find(s=>s.id===id); }
+function getBow(id){ return data.bows.find(b=>b.id===id); }
+function getArrowSetup(id){ return data.arrowSetups.find(a=>a.id===id); }
+function arrowsForBow(bowId){ return data.arrowSetups.filter(a=>a.bowId===bowId); }
+function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
+
+function groupingMetrics(g){
+  const impacts = g.impacts||[];
+  if(impacts.length===0) return {count:0, meanRadius:0, extremeSpread:0};
+  const meanRadius = impacts.reduce((a,p)=>a+p.distIn,0)/impacts.length;
+  let extremeSpread = 0;
+  for(let i=0;i<impacts.length;i++) for(let j=i+1;j<impacts.length;j++){
+    const d = Math.hypot(impacts[i].dxIn-impacts[j].dxIn, impacts[i].dyIn-impacts[j].dyIn);
+    if(d>extremeSpread) extremeSpread = d;
+  }
+  return {count:impacts.length, meanRadius, extremeSpread};
+}
+function allGroupingsFlat(){
+  const out = [];
+  data.sessions.forEach(s=> (s.groupings||[]).forEach(g=> out.push({session:s, grouping:g})));
+  out.sort((a,b)=> new Date(a.grouping.createdAt) - new Date(b.grouping.createdAt));
+  return out;
+}
+function allImpactsFlat(){
+  const out = [];
+  data.sessions.forEach(s=> (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=>{
+    out.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date});
+  })));
+  return out;
+}
+function recomputeImpact(p, asset){
+  p.dxIn = (p.xPx-asset.centerPx.x)/asset.pixelsPerInch;
+  p.dyIn = (p.yPx-asset.centerPx.y)/asset.pixelsPerInch;
+  p.distIn = Math.hypot(p.dxIn,p.dyIn);
+}
+function resizeImageFile(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = DISPLAY_W/img.width;
+        const canvas = document.createElement('canvas');
+        canvas.width = DISPLAY_W; canvas.height = Math.round(img.height*scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img,0,0,canvas.width,canvas.height);
+        resolve({dataUrl:canvas.toDataURL('image/jpeg',0.85), width:canvas.width, height:canvas.height});
+      };
+      img.onerror = reject; img.src = e.target.result;
+    };
+    reader.onerror = reject; reader.readAsDataURL(file);
+  });
+}
+function colorForDistance(d, min, max){
+  if(min===max) return 'hsl(38,75%,58%)';
+  const t = (d-min)/(max-min);
+  return `hsl(${165-t*165},70%,55%)`;
+}
+function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
+function distanceOptions(selected){
+  let s = '<option value="" disabled '+(selected?'':'selected')+'>Select yards…</option>';
+  for(let i=5;i<=100;i+=5) s += `<option value="${i}" ${String(selected)===String(i)?'selected':''}>${i} yd</option>`;
+  s += `<option value="custom" ${selected==='custom'?'selected':''}>Custom…</option>`;
+  return s;
+}
+function adjusterHtml(label){
+  return `<div class="adjuster">
+    <div class="adj-label">${label}</div>
+    <div class="adj-grid">
+      <span></span><button class="adj-btn" data-dx="0" data-dy="-1">▲</button><span></span>
+      <button class="adj-btn" data-dx="-1" data-dy="0">◀</button><span class="adj-dot">•</span><button class="adj-btn" data-dx="1" data-dy="0">▶</button>
+      <span></span><button class="adj-btn" data-dx="0" data-dy="1">▼</button><span></span>
+    </div>
+  </div>`;
+}
+function wireAdjuster(container, onNudge){
+  container.querySelectorAll('.adj-btn').forEach(b=>{
+    b.onclick = ()=> onNudge(parseInt(b.dataset.dx)*NUDGE, parseInt(b.dataset.dy)*NUDGE);
+  });
+}
+
+// ---------- root render ----------
+function render(){
+  Object.keys(charts).forEach(destroyChart);
+  if(view.screen==='home') renderHome();
+  else if(view.screen==='newSession') renderFlow();
+  else if(view.screen==='sessionDetail') renderSessionDetail();
+  else if(view.screen==='groupingDetail') renderGroupingDetail();
+  else if(view.screen==='allImpacts') renderAllImpacts();
+  else if(view.screen==='equipmentTrends') renderEquipmentTrends();
+}
+
+function renderAvgImpactSvg(flatImpacts){
+  const size = 170, cx=size/2, cy=size/2;
+  const hasData = flatImpacts.length>0;
+  const avgDx = hasData ? flatImpacts.reduce((a,p)=>a+p.dxIn,0)/flatImpacts.length : 0;
+  const avgDy = hasData ? flatImpacts.reduce((a,p)=>a+p.dyIn,0)/flatImpacts.length : 0;
+  const avgDist = Math.hypot(avgDx,avgDy);
+  const ringStep = Math.max(0.5, (avgDist*1.3)/3 || 1);
+  const pxPerIn = (size/2-16)/(ringStep*3);
+  let svg = `<svg viewBox="0 0 ${size} ${size}" width="170" height="170" style="display:block;margin:0 auto;">`;
+  for(let i=1;i<=3;i++){
+    svg += `<circle cx="${cx}" cy="${cy}" r="${i*ringStep*pxPerIn}" fill="none" stroke="#333B2A" stroke-width="1"/>`;
+  }
+  svg += `<line x1="${cx-7}" y1="${cy}" x2="${cx+7}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+          <line x1="${cx}" y1="${cy-7}" x2="${cx}" y2="${cy+7}" stroke="#E8A33D" stroke-width="1.5"/>`;
+  if(hasData){
+    svg += `<circle cx="${cx+avgDx*pxPerIn}" cy="${cy+avgDy*pxPerIn}" r="6.5" fill="#C1502E" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
+  }
+  svg += `</svg>`;
+  const caption = hasData ? `average offset: ${fmt(avgDist,2)}" from center` : 'no impacts logged yet';
+  return svg + `<div style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:6px;">${caption}</div>`;
+}
+
+// ---------- HOME ----------
+let homeFilterBow = 'all';
+let homeFilterArrow = 'all';
+function sessionsMatchingHomeFilter(){
+  return data.sessions.filter(s=>{
+    if(homeFilterBow!=='all' && s.bowId!==homeFilterBow) return false;
+    if(homeFilterBow!=='all' && homeFilterArrow!=='all' && s.arrowSetupId!==homeFilterArrow) return false;
+    return true;
+  });
+}
+function renderHome(){
+  const matchingSessions = sessionsMatchingHomeFilter();
+  const sortedSessions = [...matchingSessions].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  const flatGroupings = [];
+  matchingSessions.forEach(s=> (s.groupings||[]).forEach(g=> flatGroupings.push({session:s, grouping:g})));
+  flatGroupings.sort((a,b)=> new Date(a.grouping.createdAt)-new Date(b.grouping.createdAt));
+  const totalImpacts = flatGroupings.reduce((a,x)=>a+(x.grouping.impacts?.length||0),0);
+  let best = null, bestDistance = null;
+  const spreadValues = [];
+  flatGroupings.forEach(({grouping})=>{
+    const m = groupingMetrics(grouping);
+    if(m.count>=2){
+      spreadValues.push(m.extremeSpread);
+      if(best===null || m.extremeSpread<best){ best = m.extremeSpread; bestDistance = grouping.distance; }
+    }
+  });
+  const avgGroupSize = spreadValues.length ? spreadValues.reduce((a,v)=>a+v,0)/spreadValues.length : null;
+  const flatImpacts = [];
+  matchingSessions.forEach(s=> (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=>{
+    flatImpacts.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date});
+  })));
+  const avgDistFromCenter = flatImpacts.length ? flatImpacts.reduce((a,p)=>a+p.distIn,0)/flatImpacts.length : null;
+  const avgImpactSvg = renderAvgImpactSvg(flatImpacts);
+  const arrowOptions = homeFilterBow!=='all' ? arrowsForBow(homeFilterBow) : [];
+
+  $app.innerHTML = `
+    <div class="hdr"><h1>Impact Log</h1><div class="sub">GROUP TRACKER</div></div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Viewing</span>
+      <label class="f-label">Bow</label>
+      <select id="homeBowFilter">
+        <option value="all" ${homeFilterBow==='all'?'selected':''}>All bows</option>
+        ${data.bows.map(b=>`<option value="${b.id}" ${homeFilterBow===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}
+      </select>
+      <label class="f-label">Arrow setup</label>
+      <select id="homeArrowFilter" ${homeFilterBow==='all'?'disabled':''}>
+        <option value="all" ${homeFilterArrow==='all'?'selected':''}>All arrows for this bow</option>
+        ${arrowOptions.map(a=>`<option value="${a.id}" ${homeFilterArrow===a.id?'selected':''}>${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Overview</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num">${matchingSessions.length}</div><div class="cap">SESSIONS</div></div>
+        <div class="stat"><div class="num">${totalImpacts}</div><div class="cap">TOTAL IMPACTS</div></div>
+        <div class="stat">
+          <div class="num" style="color:var(--olive)">${best!==null?fmt(best,1):'—'}"</div>
+          <div class="cap">BEST GROUP${bestDistance?' · '+bestDistance+'y':''}</div>
+        </div>
+      </div>
+      <div class="stat-row" style="margin-top:14px;">
+        <div class="stat"><div class="num" style="color:var(--amber)">${avgGroupSize!==null?fmt(avgGroupSize,1):'—'}"</div><div class="cap">AVG GROUP SIZE</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${avgDistFromCenter!==null?fmt(avgDistFromCenter,1):'—'}"</div><div class="cap">AVG DIST FROM CENTER</div></div>
+      </div>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Average impact</span>
+      ${avgImpactSvg}
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Trend — group size over time</span>
+      <div id="trendHolder"><canvas id="trendCanvas" height="140"></canvas></div>
+    </div>
+
+    <div class="nav-row">
+      <button class="btn" id="newSessionBtn">+ New Session</button>
+      <button class="btn secondary" id="allImpactsBtn">View All Impacts</button>
+    </div>
+    <div class="nav-row">
+      <button class="btn secondary" id="equipTrendsBtn">Equipment Trends</button>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Sessions</span>
+      <div>
+        ${sortedSessions.length===0 ? '<div class="empty">No sessions match this filter.</div>' :
+          sortedSessions.map(s=>{
+            const gCount = (s.groupings||[]).length;
+            const shotCount = (s.groupings||[]).reduce((a,g)=>a+(g.impacts?.length||0),0);
+            return `<div class="row-item" data-id="${s.id}">
+              <div><div class="t1">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
+              <div class="t2">${gCount} grouping${gCount!==1?'s':''} · ${shotCount} shot${shotCount!==1?'s':''}</div></div>
+              <div class="metric">›</div>
+            </div>`;
+          }).join('')}
+      </div>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Equipment</span>
+      <button class="btn secondary" id="addBowBtn" style="margin-bottom:${data.bows.length?'10px':'0'};">+ Add Bow</button>
+      ${data.bows.map(b=>{
+        const arrows = arrowsForBow(b.id);
+        const bowUsed = data.sessions.some(s=>s.bowId===b.id);
+        return `<div style="border:1px solid var(--border);padding:10px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="t1">${escapeHtml(b.name)}</div>
+            ${!bowUsed ? `<button class="btn small danger" data-delete-bow="${b.id}">Delete</button>` : ''}
+          </div>
+          ${arrows.map(a=>{
+            const arrowUsed = data.sessions.some(s=>s.arrowSetupId===a.id);
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 4px 14px;">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">↳ ${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</span>
+              ${!arrowUsed ? `<button class="btn small danger" data-delete-arrow="${a.id}" style="font-size:10px;padding:4px 8px;">Delete</button>` : ''}
+            </div>`;
+          }).join('')}
+          <button class="btn ghost" data-add-arrow="${b.id}" style="margin-left:14px;">+ Add arrow setup</button>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Target Library</span>
+      <button class="btn secondary" id="addTargetBtn" style="margin-bottom:${data.targetLibrary.length?'10px':'0'};">+ Add Target</button>
+      ${data.targetLibrary.length ? data.targetLibrary.slice().reverse().map(a=>{
+        const usedCount = data.sessions.filter(s=>s.targetId===a.id).length;
+        return `<div class="lib-item">
+          <img src="${a.dataUrl}">
+          <div class="info"><div class="t1">${escapeHtml(a.name)}</div><div class="t2">${fmtDate(a.createdAt)} · used in ${usedCount} session${usedCount!==1?'s':''}</div></div>
+          ${usedCount===0 ? `<button class="btn small danger" data-delete-asset="${a.id}">Delete</button>` : ''}
+        </div>`;
+      }).join('') : ''}
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Backup</span>
+      <p class="instr" style="margin-bottom:10px;">Your data is saved in this app automatically, but export a copy now and then as insurance.</p>
+      <div class="btn-row">
+        <button class="btn secondary" id="exportBtn">Export backup</button>
+        <button class="btn secondary" id="importBtn">Import backup</button>
+      </div>
+      <input type="file" id="importFile" accept="application/json" style="display:none">
+    </div>
+  `;
+  document.getElementById('homeBowFilter').onchange = e=>{ homeFilterBow = e.target.value; homeFilterArrow='all'; render(); };
+  document.getElementById('homeArrowFilter').onchange = e=>{ homeFilterArrow = e.target.value; render(); };
+  document.getElementById('newSessionBtn').onclick = startNewSession;
+  document.getElementById('allImpactsBtn').onclick = ()=>{ view={screen:'allImpacts'}; render(); };
+  document.getElementById('equipTrendsBtn').onclick = ()=>{ view={screen:'equipmentTrends'}; render(); };
+  document.getElementById('addBowBtn').onclick = ()=> startAddBow(null);
+  document.querySelectorAll('[data-add-arrow]').forEach(btn=>{
+    btn.onclick = ()=> startAddArrow(btn.dataset.addArrow, null);
+  });
+  document.querySelectorAll('[data-delete-bow]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Delete this bow and its arrow setups from your equipment list?')) return;
+      const bowId = btn.dataset.deleteBow;
+      data.arrowSetups = data.arrowSetups.filter(a=>a.bowId!==bowId);
+      data.bows = data.bows.filter(b=>b.id!==bowId);
+      await saveData();
+      render();
+    };
+  });
+  document.querySelectorAll('[data-delete-arrow]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Delete this arrow setup?')) return;
+      data.arrowSetups = data.arrowSetups.filter(a=>a.id!==btn.dataset.deleteArrow);
+      await saveData();
+      render();
+    };
+  });
+  document.getElementById('addTargetBtn').onclick = startAddTarget;
+  document.querySelectorAll('[data-delete-asset]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Delete this target from your library?')) return;
+      data.targetLibrary = data.targetLibrary.filter(a=>a.id!==btn.dataset.deleteAsset);
+      await saveData();
+      render();
+    };
+  });
+  document.getElementById('exportBtn').onclick = exportData;
+  document.getElementById('importBtn').onclick = ()=> document.getElementById('importFile').click();
+  document.getElementById('importFile').onchange = handleImportFile;
+  document.querySelectorAll('.row-item').forEach(el=>{
+    el.onclick = ()=>{ view={screen:'sessionDetail', id:el.dataset.id}; render(); };
+  });
+  renderTrendChart(flatGroupings);
+}
+function renderTrendChart(flatGroupings){
+  const ctx = document.getElementById('trendCanvas');
+  if(!ctx) return;
+  const withShots = flatGroupings.filter(x=>(x.grouping.impacts||[]).length>0);
+  if(withShots.length===0){
+    ctx.parentElement.innerHTML = '<div class="trend-empty">Log at least one grouping to see your trend.</div>';
+    return;
+  }
+  const labels = withShots.map(x=> fmtDate(x.grouping.createdAt) + (x.grouping.distance? ' · '+x.grouping.distance+'yd':''));
+  destroyChart('trendCanvas');
+  charts['trendCanvas'] = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets:[
+      { label:'Extreme spread (in)', data:withShots.map(x=>groupingMetrics(x.grouping).extremeSpread), borderColor:'#E8A33D', backgroundColor:'#E8A33D', tension:0.25, pointRadius:3, borderWidth:2 },
+      { label:'Mean radius (in)', data:withShots.map(x=>groupingMetrics(x.grouping).meanRadius), borderColor:'#7FA65C', backgroundColor:'#7FA65C', tension:0.25, pointRadius:3, borderWidth:2, borderDash:[4,3] }
+    ]},
+    options:{ responsive:true,
+      plugins:{ legend:{ labels:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} } } },
+      scales:{
+        x:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:9}, maxRotation:60, minRotation:60 }, grid:{ color:'#252B1D' } },
+        y:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ color:'#252B1D' }, title:{display:true,text:'inches',color:'#8B9184',font:{family:'IBM Plex Mono',size:10}} }
+      }
+    }
+  });
+}
+
+function getPreviousDistance(sessionId){
+  if(sessionId){
+    const s = getSession(sessionId);
+    if(s && s.groupings.length) return s.groupings[s.groupings.length-1].distance;
+  }
+  const flat = allGroupingsFlat();
+  return flat.length ? flat[flat.length-1].grouping.distance : null;
+}
+function getPreviousEquipment(){
+  if(!data.sessions.length) return {bowId:null, arrowSetupId:null};
+  const last = [...data.sessions].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
+  return {bowId:last.bowId||null, arrowSetupId:last.arrowSetupId||null};
+}
+const PRESET_YARDAGES = [5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100];
+function applyPreviousDistance(flow, dist){
+  if(dist==null){ flow.distanceValue=''; flow.customDistance=''; return; }
+  if(PRESET_YARDAGES.includes(dist)){ flow.distanceValue=String(dist); flow.customDistance=''; }
+  else { flow.distanceValue='custom'; flow.customDistance=String(dist); }
+}
+
+// ---------- NEW SESSION / ADD GROUPING FLOW ----------
+function startNewSession(){
+  flow = { mode:'newSession', step:'chooseTarget', assetDraft:null, targetId:null, sessionId:null, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'', bowId:null, arrowSetupId:null };
+  applyPreviousDistance(flow, getPreviousDistance(null));
+  const eq = getPreviousEquipment();
+  flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
+  view = {screen:'newSession'};
+  render();
+}
+function startAddTarget(){
+  flow = { mode:'addTarget', step:'chooseTarget', assetDraft:null, targetId:null, sessionId:null, impacts:[] };
+  view = {screen:'newSession'};
+  render();
+}
+function startAddGrouping(sessionId){
+  const s = getSession(sessionId);
+  flow = { mode:'addGrouping', step:'capture', assetDraft:null, targetId:s.targetId, sessionId:s.id, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'' };
+  applyPreviousDistance(flow, getPreviousDistance(sessionId));
+  view = {screen:'newSession'};
+  render();
+}
+function startAddBow(returnFlow){
+  flow = { mode:'addBow', step:'nameBow', bowName:'', returnFlow: returnFlow||null };
+  view = {screen:'newSession'};
+  render();
+}
+function startAddArrow(bowId, returnFlow){
+  flow = { mode:'addArrow', step:'nameArrow', bowId, arrowName:'', arrowWeight:'', returnFlow: returnFlow||null };
+  view = {screen:'newSession'};
+  render();
+}
+function cancelFlow(){
+  const goTo = (flow && flow.sessionId) ? {screen:'sessionDetail', id:flow.sessionId} : {screen:'home'};
+  flow=null; view=goTo; render();
+}
+function renderFlow(){
+  const stepNames = {
+    chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
+    calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
+    nameBow:'Add bow', nameArrow:'Add arrow setup'
+  };
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">${stepNames[flow.step]}</div>
+    <button class="close" id="closeFlow">‹ Back</button></div>
+    <div id="flowBody"></div>
+  `;
+  document.getElementById('closeFlow').onclick = ()=>{
+    if(flow.step==='savedPrompt'){ cancelFlow(); return; }
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget'];
+    const isTrivial = trivialSteps.includes(flow.step);
+    if(!isTrivial && !confirm('Discard unsaved changes?')) return;
+    if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
+    else cancelFlow();
+  };
+  const body = document.getElementById('flowBody');
+  if(flow.step==='chooseTarget') renderChooseTarget(body);
+  else if(flow.step==='calibrate') renderCalibrateStep(body);
+  else if(flow.step==='center') renderCenterStep(body);
+  else if(flow.step==='chooseEquipment') renderChooseEquipmentStep(body);
+  else if(flow.step==='capture') renderCaptureStep(body);
+  else if(flow.step==='savedPrompt') renderSavedPrompt(body);
+  else if(flow.step==='nameBow') renderNameBowStep(body);
+  else if(flow.step==='nameArrow') renderNameArrowStep(body);
+}
+function renderChooseEquipmentStep(body){
+  body.innerHTML = `
+    <p class="instr">Pick the bow and arrow setup for this whole session (applies to every grouping you log in it).</p>
+    <label class="f-label">Bow</label>
+    <select id="bowInput">
+      <option value="" ${!flow.bowId?'selected':''}>No bow selected</option>
+      ${data.bows.map(b=>`<option value="${b.id}" ${flow.bowId===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}
+    </select>
+    <label class="f-label">Arrow setup</label>
+    <select id="arrowInput" ${!flow.bowId?'disabled':''}>
+      <option value="" ${!flow.arrowSetupId?'selected':''}>No arrow setup selected</option>
+      ${flow.bowId ? arrowsForBow(flow.bowId).map(a=>`<option value="${a.id}" ${flow.arrowSetupId===a.id?'selected':''}>${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</option>`).join('') : ''}
+    </select>
+    <button class="btn ghost" id="manageEquipBtn" type="button">+ Add bow / arrow setup</button>
+    <button class="btn" id="continueBtn" style="margin-top:10px;">Continue</button>
+  `;
+  document.getElementById('bowInput').onchange = e=>{ flow.bowId = e.target.value||null; flow.arrowSetupId = null; renderChooseEquipmentStep(body); };
+  document.getElementById('arrowInput').onchange = e=>{ flow.arrowSetupId = e.target.value||null; };
+  document.getElementById('manageEquipBtn').onclick = ()=>{
+    if(flow.bowId) startAddArrow(flow.bowId, flow);
+    else startAddBow(flow);
+  };
+  document.getElementById('continueBtn').onclick = ()=>{ flow.step='capture'; render(); };
+}
+function renderNameBowStep(body){
+  body.innerHTML = `
+    <p class="instr">Give this bow a name so you can pick it when logging sessions.</p>
+    <label class="f-label">Bow name</label>
+    <input type="text" id="bowNameInput" placeholder="e.g. Mathews Phase4" value="${escapeHtml(flow.bowName)}">
+    <button class="btn" id="saveBowBtn">Save bow</button>
+  `;
+  document.getElementById('bowNameInput').oninput = e=>{ flow.bowName = e.target.value; };
+  document.getElementById('saveBowBtn').onclick = async ()=>{
+    if(!flow.bowName.trim()){ alert('Enter a name for this bow.'); return; }
+    const bow = { id:uid(), name:flow.bowName.trim(), createdAt:new Date().toISOString() };
+    data.bows.push(bow);
+    await saveData();
+    if(flow.returnFlow){
+      flow = flow.returnFlow;
+      flow.bowId = bow.id;
+      flow.arrowSetupId = null;
+      view = {screen:'newSession'};
+    } else {
+      flow = null; view = {screen:'home'};
+    }
+    render();
+  };
+}
+function renderNameArrowStep(body){
+  const bow = getBow(flow.bowId);
+  body.innerHTML = `
+    <p class="instr">Add an arrow setup for <b>${escapeHtml(bow?bow.name:'this bow')}</b>.</p>
+    <label class="f-label">Arrow setup name</label>
+    <input type="text" id="arrowNameInput" placeholder="e.g. Easton 4mm, 100gr tip" value="${escapeHtml(flow.arrowName)}">
+    <label class="f-label">Total arrow weight in grains (optional)</label>
+    <input type="number" id="arrowWeightInput" placeholder="e.g. 420" value="${escapeHtml(flow.arrowWeight)}">
+    <button class="btn" id="saveArrowBtn">Save arrow setup</button>
+  `;
+  document.getElementById('arrowNameInput').oninput = e=>{ flow.arrowName = e.target.value; };
+  document.getElementById('arrowWeightInput').oninput = e=>{ flow.arrowWeight = e.target.value; };
+  document.getElementById('saveArrowBtn').onclick = async ()=>{
+    if(!flow.arrowName.trim()){ alert('Enter a name for this arrow setup.'); return; }
+    const arrow = { id:uid(), bowId:flow.bowId, name:flow.arrowName.trim(), weight: flow.arrowWeight?parseFloat(flow.arrowWeight):null, createdAt:new Date().toISOString() };
+    data.arrowSetups.push(arrow);
+    await saveData();
+    if(flow.returnFlow){
+      flow = flow.returnFlow;
+      flow.arrowSetupId = arrow.id;
+      view = {screen:'newSession'};
+    } else {
+      flow = null; view = {screen:'home'};
+    }
+    render();
+  };
+}
+
+function renderChooseTarget(body){
+  const lib = data.targetLibrary;
+  const isAddTarget = flow.mode==='addTarget';
+  body.innerHTML = `
+    <p class="instr">${isAddTarget ? 'Upload a target photo to save it to your library for future sessions.' : "Upload a new target photo, or reuse one already in your library — saved targets and their calibration stick around indefinitely."}</p>
+    <div class="upload-box" id="uploadBox">Tap to choose a photo<br>(from your library or camera)</div>
+    <input type="file" id="fileInput" accept="image/*" style="display:none">
+    ${(!isAddTarget && lib.length)? `<div class="panel" style="margin-top:8px;"><span class="bl"></span><span class="br"></span>
+      <span class="label">Saved targets</span>
+      ${lib.slice().reverse().map(a=>`
+        <div class="lib-item">
+          <img src="${a.dataUrl}">
+          <div class="info"><div class="t1">${escapeHtml(a.name)}</div><div class="t2">${fmtDate(a.createdAt)}</div></div>
+          <button class="btn small" data-asset="${a.id}">Use</button>
+        </div>
+      `).join('')}
+    </div>` : ''}
+  `;
+  document.getElementById('uploadBox').onclick = ()=> document.getElementById('fileInput').click();
+  document.getElementById('fileInput').onchange = async (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const {dataUrl,width,height} = await resizeImageFile(file);
+    flow.assetDraft = { dataUrl, imgW:width, imgH:height, calibPoints:[], selectedCalibIndex:null, pixelsPerInch:null, centerPx:null, name:'' };
+    flow.step = 'calibrate';
+    render();
+  };
+  body.querySelectorAll('[data-asset]').forEach(btn=>{
+    btn.onclick = ()=>{ flow.targetId = btn.dataset.asset; flow.step = 'chooseEquipment'; render(); };
+  });
+}
+
+function renderCalibrateStep(body){
+  const d = flow.assetDraft;
+  const showAdjuster = d.calibPoints.length>0;
+  body.innerHTML = `
+    <p class="instr">Tap <b>two points</b> a known real-world distance apart (e.g. edges of a ring).</p>
+    <div class="tap-wrap" id="tapWrap"><img src="${d.dataUrl}"><svg viewBox="0 0 ${d.imgW} ${d.imgH}"></svg></div>
+    ${showAdjuster ? `
+      <div class="chip-row" id="calibChips">
+        ${d.calibPoints.map((p,i)=>`<button class="chip ${d.selectedCalibIndex===i?'active':''}" data-idx="${i}">Point ${i+1}</button>`).join('')}
+      </div>
+      ${adjusterHtml('Fine-tune selected point')}
+    ` : ''}
+    <div class="btn-row">
+      <button class="btn secondary" id="undoPointBtn" ${d.calibPoints.length===0?'disabled':''}>Undo last point</button>
+      <button class="btn secondary" id="resetPts" ${d.calibPoints.length===0?'disabled':''}>Reset all</button>
+    </div>
+    <div id="calibForm" style="display:${d.calibPoints.length===2?'block':'none'};margin-top:12px;">
+      <label class="f-label">Real-world distance between those points (inches)</label>
+      <input type="number" id="realDist" step="0.01" placeholder="e.g. 3.0" inputmode="decimal">
+      <button class="btn" id="confirmCalib">Confirm scale</button>
+    </div>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCalibPoints(svg, d.calibPoints, d.selectedCalibIndex);
+  wrap.addEventListener('click', e=>{
+    if(d.calibPoints.length>=2) return;
+    const rect = wrap.getBoundingClientRect();
+    d.calibPoints.push({ x:(e.clientX-rect.left)/rect.width*d.imgW, y:(e.clientY-rect.top)/rect.height*d.imgH });
+    d.selectedCalibIndex = d.calibPoints.length-1;
+    renderCalibrateStep(body);
+  });
+  if(showAdjuster){
+    document.getElementById('calibChips').querySelectorAll('.chip').forEach(c=>{
+      c.onclick = ()=>{ d.selectedCalibIndex = parseInt(c.dataset.idx); renderCalibrateStep(body); };
+    });
+    wireAdjuster(body, (dx,dy)=>{
+      const p = d.calibPoints[d.selectedCalibIndex];
+      p.x = clamp(p.x+dx, 0, d.imgW); p.y = clamp(p.y+dy, 0, d.imgH);
+      drawCalibPoints(svg, d.calibPoints, d.selectedCalibIndex);
+    });
+  }
+  document.getElementById('undoPointBtn').onclick = ()=>{
+    d.calibPoints.pop();
+    d.selectedCalibIndex = d.calibPoints.length? d.calibPoints.length-1 : null;
+    renderCalibrateStep(body);
+  };
+  document.getElementById('resetPts').onclick = ()=>{ d.calibPoints=[]; d.selectedCalibIndex=null; renderCalibrateStep(body); };
+  if(d.calibPoints.length===2){
+    document.getElementById('confirmCalib').onclick = ()=>{
+      const val = parseFloat(document.getElementById('realDist').value);
+      if(!val||val<=0){ alert('Enter a distance greater than 0.'); return; }
+      const [a,b] = d.calibPoints;
+      d.pixelsPerInch = Math.hypot(a.x-b.x,a.y-b.y)/val;
+      flow.step = 'center'; render();
+    };
+  }
+}
+function drawCalibPoints(svg, pts, selectedIdx){
+  let s=''; pts.forEach((p,i)=>{
+    const isSel = i===selectedIdx;
+    s+=`<circle cx="${p.x}" cy="${p.y}" r="${isSel?8:6}" fill="#E8A33D" fill-opacity="${isSel?1:0.7}" stroke="#12140F" stroke-width="2"/>`;
+  });
+  if(pts.length===2){ const [a,b]=pts; s+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#E8A33D" stroke-width="2" stroke-dasharray="5,4"/>`; }
+  svg.innerHTML = s;
+}
+
+function renderCenterStep(body){
+  const d = flow.assetDraft;
+  body.innerHTML = `
+    <p class="instr">Tap the <b>center</b> of the target (point of aim).</p>
+    <div class="tap-wrap" id="tapWrap"><img src="${d.dataUrl}"><svg viewBox="0 0 ${d.imgW} ${d.imgH}"></svg></div>
+    ${d.centerPx ? adjusterHtml('Fine-tune center') : ''}
+    <label class="f-label">Name this target (optional)</label>
+    <input type="text" id="nameInput" placeholder="e.g. Backyard 3-spot" value="${escapeHtml(d.name)}">
+    <button class="btn" id="nextBtn" ${d.centerPx?'':'disabled'}>Save target &amp; continue</button>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCenter(svg, d.centerPx);
+  wrap.addEventListener('click', e=>{
+    const rect = wrap.getBoundingClientRect();
+    d.centerPx = { x:(e.clientX-rect.left)/rect.width*d.imgW, y:(e.clientY-rect.top)/rect.height*d.imgH };
+    renderCenterStep(body);
+  });
+  if(d.centerPx){
+    wireAdjuster(body, (dx,dy)=>{
+      d.centerPx.x = clamp(d.centerPx.x+dx, 0, d.imgW);
+      d.centerPx.y = clamp(d.centerPx.y+dy, 0, d.imgH);
+      drawCenter(svg, d.centerPx);
+    });
+  }
+  document.getElementById('nameInput').oninput = e=>{ d.name = e.target.value; };
+  const nb = document.getElementById('nextBtn');
+  if(d.centerPx) nb.onclick = async ()=>{
+    const asset = { id: uid(), name: d.name.trim() || ('Target — '+fmtDate(new Date().toISOString())),
+      dataUrl:d.dataUrl, imgW:d.imgW, imgH:d.imgH, pixelsPerInch:d.pixelsPerInch, centerPx:d.centerPx, createdAt: new Date().toISOString() };
+    data.targetLibrary.push(asset);
+    await saveData();
+    if(flow.mode==='addTarget'){
+      flow = null;
+      view = {screen:'home'};
+      render();
+      return;
+    }
+    flow.targetId = asset.id;
+    flow.step = 'chooseEquipment';
+    render();
+  };
+}
+function drawCenter(svg, c){
+  if(!c){ svg.innerHTML=''; return; }
+  svg.innerHTML = `<line x1="${c.x-14}" y1="${c.y}" x2="${c.x+14}" y2="${c.y}" stroke="#E8A33D" stroke-width="2"/>
+    <line x1="${c.x}" y1="${c.y-14}" x2="${c.x}" y2="${c.y+14}" stroke="#E8A33D" stroke-width="2"/>
+    <circle cx="${c.x}" cy="${c.y}" r="16" fill="none" stroke="#E8A33D" stroke-width="1.5"/>`;
+}
+
+function renderCaptureStep(body){
+  const asset = getAsset(flow.targetId);
+  const isFirstGrouping = flow.mode==='newSession';
+  const hasSel = flow.selectedImpactIndex!==null && flow.impacts[flow.selectedImpactIndex];
+  body.innerHTML = `
+    <p class="instr">Tap each impact on the target as you log this grouping.</p>
+    <div class="shot-counter">${flow.impacts.length} impact${flow.impacts.length!==1?'s':''} in this grouping</div>
+    <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
+    ${flow.impacts.length ? `
+      <div class="chip-row" id="impactChips">
+        ${flow.impacts.map((p,i)=>`<button class="chip ${flow.selectedImpactIndex===i?'active':''}" data-idx="${i}">${p.order}</button>`).join('')}
+      </div>
+      ${hasSel ? adjusterHtml('Fine-tune arrow '+flow.impacts[flow.selectedImpactIndex].order) : ''}
+    ` : ''}
+    ${isFirstGrouping ? `<label class="f-label">Session label (optional)</label>
+    <input type="text" id="sessionLabelInput" placeholder="e.g. Saturday practice" value="${escapeHtml(flow.sessionLabel)}">` : ''}
+    <label class="f-label">Distance for this grouping</label>
+    <select id="distInput">${distanceOptions(flow.distanceValue)}</select>
+    ${flow.distanceValue==='custom' ? `<input type="number" id="customDistInput" step="0.5" placeholder="Enter exact yards" value="${flow.customDistance||''}">` : ''}
+    <div class="btn-row">
+      <button class="btn secondary" id="undoBtn" ${flow.impacts.length===0?'disabled':''}>Undo last</button>
+      <button class="btn" id="confirmBtn" ${flow.impacts.length===0?'disabled':''}>Confirm grouping</button>
+    </div>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+  wrap.addEventListener('click', e=>{
+    const rect = wrap.getBoundingClientRect();
+    const x = (e.clientX-rect.left)/rect.width*asset.imgW, y = (e.clientY-rect.top)/rect.height*asset.imgH;
+    const p = { xPx:x, yPx:y, order:flow.impacts.length+1 };
+    recomputeImpact(p, asset);
+    flow.impacts.push(p);
+    flow.selectedImpactIndex = flow.impacts.length-1;
+    renderCaptureStep(body);
+  });
+  if(flow.impacts.length){
+    document.getElementById('impactChips').querySelectorAll('.chip').forEach(c=>{
+      c.onclick = ()=>{ flow.selectedImpactIndex = parseInt(c.dataset.idx); renderCaptureStep(body); };
+    });
+    if(hasSel){
+      wireAdjuster(body, (dx,dy)=>{
+        const p = flow.impacts[flow.selectedImpactIndex];
+        p.xPx = clamp(p.xPx+dx, 0, asset.imgW); p.yPx = clamp(p.yPx+dy, 0, asset.imgH);
+        recomputeImpact(p, asset);
+        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+      });
+    }
+  }
+  if(isFirstGrouping) document.getElementById('sessionLabelInput').oninput = e=>{ flow.sessionLabel = e.target.value; };
+  document.getElementById('distInput').onchange = e=>{ flow.distanceValue = e.target.value; renderCaptureStep(body); };
+  const customInput = document.getElementById('customDistInput');
+  if(customInput) customInput.oninput = e=>{ flow.customDistance = e.target.value; };
+  document.getElementById('undoBtn').onclick = ()=>{
+    flow.impacts.pop();
+    flow.selectedImpactIndex = flow.impacts.length? flow.impacts.length-1 : null;
+    renderCaptureStep(body);
+  };
+  document.getElementById('confirmBtn').onclick = async ()=>{
+    const distVal = flow.distanceValue==='custom' ? parseFloat(flow.customDistance) : parseFloat(document.getElementById('distInput').value);
+    if(!distVal || distVal<=0){ alert('Select or enter the shooting distance for this grouping.'); return; }
+    const grouping = { id:uid(), distance:distVal, impacts:flow.impacts, createdAt:new Date().toISOString() };
+    if(flow.mode==='newSession'){
+      const session = { id:uid(), date:new Date().toISOString(), label:flow.sessionLabel||'', targetId:flow.targetId, bowId:flow.bowId||null, arrowSetupId:flow.arrowSetupId||null, groupings:[grouping] };
+      data.sessions.push(session);
+      flow.sessionId = session.id;
+      flow.mode = 'addGrouping';
+    } else {
+      const s = getSession(flow.sessionId);
+      s.groupings.push(grouping);
+    }
+    await saveData();
+    flow.lastGrouping = grouping;
+    flow.impacts = [];
+    flow.selectedImpactIndex = null;
+    applyPreviousDistance(flow, grouping.distance);
+    flow.step = 'savedPrompt';
+    render();
+  };
+}
+function drawCaptureState(svg, asset, impacts, selectedIdx){
+  const {x:cx,y:cy} = asset.centerPx;
+  let s = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+           <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
+  impacts.forEach((p,i)=>{
+    const isSel = i===selectedIdx;
+    s += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${isSel?8:6}" fill="#C1502E" fill-opacity="0.9" stroke="${isSel?'#E8A33D':'#12140F'}" stroke-width="${isSel?2.5:1.5}"/>`;
+  });
+  svg.innerHTML = s;
+}
+
+function renderSavedPrompt(body){
+  const m = groupingMetrics(flow.lastGrouping);
+  body.innerHTML = `
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Grouping saved — ${flow.lastGrouping.distance}yd</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num">${m.count}</div><div class="cap">SHOTS</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${fmt(m.extremeSpread,2)}"</div><div class="cap">SPREAD</div></div>
+        <div class="stat"><div class="num" style="color:var(--olive)">${fmt(m.meanRadius,2)}"</div><div class="cap">MEAN RADIUS</div></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn secondary" id="addAnother">+ Add another grouping</button>
+      <button class="btn" id="doneBtn">Done</button>
+    </div>
+  `;
+  document.getElementById('addAnother').onclick = ()=>{ flow.step='capture'; render(); };
+  document.getElementById('doneBtn').onclick = ()=>{ const sid=flow.sessionId; flow=null; view={screen:'sessionDetail', id:sid}; render(); };
+}
+
+// ---------- SESSION DETAIL ----------
+function renderSessionDetail(){
+  const s = getSession(view.id);
+  if(!s){ view={screen:'home'}; render(); return; }
+  const asset = getAsset(s.targetId);
+  const groupings = s.groupings||[];
+  let overlaySvg = '';
+  if(asset){
+    const {x:cx,y:cy} = asset.centerPx;
+    overlaySvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
+    groupings.forEach((g,idx)=>{
+      const color = PALETTE[idx%PALETTE.length];
+      (g.impacts||[]).forEach(p=> overlaySvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="6" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`);
+    });
+  }
+  const equipLine = (s.bowId||s.arrowSetupId) ? [s.bowId?getBow(s.bowId)?.name:null, s.arrowSetupId?getArrowSetup(s.arrowSetupId)?.name:null].filter(Boolean).join(' · ') : '';
+  $app.innerHTML = `
+    <div class="flow-hdr">
+      <div class="step-label">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
+      <button class="close" id="closeDetail">‹ Back</button>
+    </div>
+    ${equipLine ? `<div class="instr" style="margin-bottom:8px;">${escapeHtml(equipLine)}</div>` : ''}
+    ${asset ? `<div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${overlaySvg}</svg></div>` : ''}
+    <div class="legend">
+      ${groupings.map((g,idx)=>{
+        const m = groupingMetrics(g);
+        return `<div class="legend-item"><span class="swatch" style="background:${PALETTE[idx%PALETTE.length]}"></span>${g.distance?g.distance+'yd':'—'} · ${m.count} shots · ${fmt(m.extremeSpread,1)}"</div>`;
+      }).join('')}
+    </div>
+    <button class="btn" id="addGroupingBtn" style="margin-top:14px;">+ Add Grouping</button>
+    <div class="panel" style="margin-top:14px;"><span class="bl"></span><span class="br"></span>
+      <span class="label">Groupings</span>
+      ${groupings.length===0?'<div class="empty">No groupings yet.</div>':
+        groupings.map((g,idx)=>{
+          const m = groupingMetrics(g);
+          return `<div class="row-item" data-gid="${g.id}">
+            <div><div class="t1">${g.distance?g.distance+' yd':'Distance not set'}</div>
+            <div class="t2">${m.count} shots · ${fmtDate(g.createdAt)}</div></div>
+            <div class="metric">${m.count?fmt(m.extremeSpread,1):'—'}<span class="u">" spread</span></div>
+          </div>`;
+        }).join('')}
+    </div>
+    <button class="btn" id="endSessionBtn" style="margin-top:14px;">End Session</button>
+    <button class="btn danger" id="deleteSessionBtn" style="margin-top:10px;">Delete session</button>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('endSessionBtn').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('addGroupingBtn').onclick = ()=> startAddGrouping(s.id);
+  document.querySelectorAll('[data-gid]').forEach(el=>{
+    el.onclick = ()=>{ view={screen:'groupingDetail', sessionId:s.id, groupingId:el.dataset.gid}; render(); };
+  });
+  document.getElementById('deleteSessionBtn').onclick = async ()=>{
+    if(!confirm('Delete this session and all its groupings? The saved target photo stays in your library.')) return;
+    data.sessions = data.sessions.filter(x=>x.id!==s.id);
+    await saveData();
+    view={screen:'home'}; render();
+  };
+}
+
+// ---------- GROUPING DETAIL ----------
+function renderGroupingDetail(){
+  const s = getSession(view.sessionId);
+  if(!s){ view={screen:'home'}; render(); return; }
+  const g = (s.groupings||[]).find(x=>x.id===view.groupingId);
+  if(!g){ view={screen:'sessionDetail', id:s.id}; render(); return; }
+  const asset = getAsset(s.targetId);
+  const m = groupingMetrics(g);
+  const {x:cx,y:cy} = asset.centerPx;
+  let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+                 <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
+  (g.impacts||[]).forEach(p=>{
+    dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="#C1502E" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>
+                <text x="${p.xPx}" y="${p.yPx+3}" font-family="IBM Plex Mono" font-size="8" fill="#12140F" text-anchor="middle">${p.order}</text>`;
+  });
+  $app.innerHTML = `
+    <div class="flow-hdr">
+      <div class="step-label">${g.distance?g.distance+' yd grouping':'Grouping'} · ${fmtDate(g.createdAt)}</div>
+      <button class="close" id="closeDetail">‹ Back</button>
+    </div>
+    <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <div class="stat-row">
+        <div class="stat"><div class="num">${m.count}</div><div class="cap">SHOTS</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${fmt(m.extremeSpread,2)}"</div><div class="cap">SPREAD</div></div>
+        <div class="stat"><div class="num" style="color:var(--olive)">${fmt(m.meanRadius,2)}"</div><div class="cap">MEAN RADIUS</div></div>
+      </div>
+    </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Distance from center by arrow</span>
+      <canvas id="arrowChart" height="140"></canvas>
+    </div>
+    <button class="btn danger" id="deleteGroupingBtn">Delete grouping</button>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'sessionDetail', id:s.id}; render(); };
+  document.getElementById('deleteGroupingBtn').onclick = async ()=>{
+    if(!confirm('Delete this grouping?')) return;
+    s.groupings = s.groupings.filter(x=>x.id!==g.id);
+    await saveData();
+    view={screen:'sessionDetail', id:s.id}; render();
+  };
+  destroyChart('arrowChart');
+  charts['arrowChart'] = new Chart(document.getElementById('arrowChart'), {
+    type:'bar',
+    data:{ labels: g.impacts.map(p=>'Arrow '+p.order), datasets:[{ label:'Distance from center (in)', data:g.impacts.map(p=>p.distIn), backgroundColor:'#E8A33D' }] },
+    options:{ responsive:true,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ display:false } },
+        y:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ color:'#252B1D' }, title:{display:true,text:'inches',color:'#8B9184',font:{family:'IBM Plex Mono',size:10}} }
+      }
+    }
+  });
+}
+
+// ---------- ALL IMPACTS ----------
+function renderAllImpacts(){
+  const flat = allImpactsFlat();
+  const distances = [...new Set(flat.map(p=>p.distance).filter(d=>d!=null))].sort((a,b)=>a-b);
+  if(allImpactsFilter===null) allImpactsFilter = new Set(distances);
+  const minD = distances[0], maxD = distances[distances.length-1];
+  const visible = flat.filter(p=> p.distance==null || allImpactsFilter.has(p.distance));
+
+  const size = 320, cx=size/2, cy=size/2;
+  let maxR = 1;
+  visible.forEach(p=> maxR = Math.max(maxR, Math.hypot(p.dxIn,p.dyIn)));
+  const ringStep = maxR<=3?1:(maxR<=6?2:Math.ceil(maxR/4));
+  const ringsTo = ringStep*Math.ceil(maxR/ringStep);
+  const pxPerIn = (size/2-16)/ringsTo;
+
+  let svg = `<svg viewBox="0 0 ${size} ${size}" width="100%" style="max-width:320px;display:block;margin:0 auto;">`;
+  for(let r=ringStep;r<=ringsTo;r+=ringStep){
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r*pxPerIn}" fill="none" stroke="#333B2A" stroke-width="1"/>`;
+    svg += `<text x="${cx+3}" y="${cy-r*pxPerIn-3}" font-family="IBM Plex Mono" font-size="8" fill="#8B9184">${r}"</text>`;
+  }
+  svg += `<line x1="${cx-8}" y1="${cy}" x2="${cx+8}" y2="${cy}" stroke="#E8A33D" stroke-width="1"/>
+          <line x1="${cx}" y1="${cy-8}" x2="${cx}" y2="${cy+8}" stroke="#E8A33D" stroke-width="1"/>`;
+  visible.forEach(p=>{
+    const color = p.distance==null ? '#8B9184' : colorForDistance(p.distance, minD, maxD);
+    svg += `<circle cx="${cx+p.dxIn*pxPerIn}" cy="${cy+p.dyIn*pxPerIn}" r="4.5" fill="${color}" fill-opacity="0.85" stroke="#12140F" stroke-width="1"/>`;
+  });
+  if(showAvgCenter && visible.length){
+    const avgDx = visible.reduce((a,p)=>a+p.dxIn,0)/visible.length;
+    const avgDy = visible.reduce((a,p)=>a+p.dyIn,0)/visible.length;
+    const ax = cx+avgDx*pxPerIn, ay = cy+avgDy*pxPerIn;
+    svg += `<g>
+      <line x1="${ax-9}" y1="${ay-9}" x2="${ax+9}" y2="${ay+9}" stroke="#7FA65C" stroke-width="2.5"/>
+      <line x1="${ax-9}" y1="${ay+9}" x2="${ax+9}" y2="${ay-9}" stroke="#7FA65C" stroke-width="2.5"/>
+      <circle cx="${ax}" cy="${ay}" r="10" fill="none" stroke="#7FA65C" stroke-width="1.5"/>
+    </g>`;
+  }
+  svg += `</svg>`;
+
+  const legend = distances.map(dist=>{
+    const count = flat.filter(p=>p.distance===dist).length;
+    const on = allImpactsFilter.has(dist);
+    return `<div class="legend-item ${on?'':'off'}" data-dist="${dist}"><span class="swatch" style="background:${colorForDistance(dist,minD,maxD)}"></span>${dist}yd · ${count}</div>`;
+  }).join('');
+
+  const overallM = (()=>{
+    if(visible.length===0) return null;
+    const meanRadius = visible.reduce((a,p)=>a+p.distIn,0)/visible.length;
+    let extremeSpread=0;
+    for(let i=0;i<visible.length;i++) for(let j=i+1;j<visible.length;j++){
+      const d = Math.hypot(visible[i].dxIn-visible[j].dxIn, visible[i].dyIn-visible[j].dyIn);
+      if(d>extremeSpread) extremeSpread=d;
+    }
+    return {meanRadius, extremeSpread, count:visible.length};
+  })();
+
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">All Impacts</div><button class="close" id="closeDetail">‹ Back</button></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Composite grouping — color coded by distance</span>
+      ${svg}
+      <button class="btn secondary small" id="toggleAvgCenter" style="margin-top:10px;">${showAvgCenter?'✓ ':''}Show average center</button>
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-top:12px;">
+        <div style="flex:1;"><label class="f-label">Min yd</label><input type="number" id="minYd" placeholder="Min" style="margin-bottom:0;" value="${rangeMinFilter!==null?rangeMinFilter:''}"></div>
+        <div style="flex:1;"><label class="f-label">Max yd</label><input type="number" id="maxYd" placeholder="Max" style="margin-bottom:0;" value="${rangeMaxFilter!==null?rangeMaxFilter:''}"></div>
+        <button class="btn secondary small" id="applyRange">Apply</button>
+      </div>
+      <div class="legend" style="margin-top:12px;">
+        ${distances.length? `<div class="legend-item ${allImpactsFilter.size===distances.length?'':'off'}" id="filterAll">All distances</div>` : ''}
+        ${legend}
+      </div>
+    </div>
+    ${overallM ? `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <div class="stat-row">
+        <div class="stat"><div class="num">${overallM.count}</div><div class="cap">SHOWN</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${fmt(overallM.extremeSpread,2)}"</div><div class="cap">SPREAD</div></div>
+        <div class="stat"><div class="num" style="color:var(--olive)">${fmt(overallM.meanRadius,2)}"</div><div class="cap">MEAN RADIUS</div></div>
+      </div>
+    </div>` : '<div class="empty">No impacts logged yet.</div>'}
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('toggleAvgCenter').onclick = ()=>{ showAvgCenter = !showAvgCenter; renderAllImpacts(); };
+  document.getElementById('applyRange').onclick = ()=>{
+    const minVal = document.getElementById('minYd').value;
+    const maxVal = document.getElementById('maxYd').value;
+    rangeMinFilter = minVal===''? null : parseFloat(minVal);
+    rangeMaxFilter = maxVal===''? null : parseFloat(maxVal);
+    allImpactsFilter = new Set(distances.filter(d=> (rangeMinFilter===null||d>=rangeMinFilter) && (rangeMaxFilter===null||d<=rangeMaxFilter)));
+    renderAllImpacts();
+  };
+  const allBtn = document.getElementById('filterAll');
+  if(allBtn) allBtn.onclick = ()=>{ allImpactsFilter = new Set(distances); rangeMinFilter=null; rangeMaxFilter=null; renderAllImpacts(); };
+  document.querySelectorAll('[data-dist]').forEach(el=>{
+    el.onclick = ()=>{
+      const d = parseFloat(el.dataset.dist);
+      if(allImpactsFilter.has(d)) allImpactsFilter.delete(d); else allImpactsFilter.add(d);
+      renderAllImpacts();
+    };
+  });
+}
+
+// ---------- EQUIPMENT TRENDS ----------
+let equipFilterBow = 'all';
+let equipFilterArrow = 'all';
+function renderEquipmentTrends(){
+  const flat = allGroupingsFlat().filter(x=>(x.grouping.impacts||[]).length>0);
+  const filtered = flat.filter(x=>{
+    if(equipFilterBow!=='all' && x.session.bowId!==equipFilterBow) return false;
+    if(equipFilterBow!=='all' && equipFilterArrow!=='all' && x.session.arrowSetupId!==equipFilterArrow) return false;
+    return true;
+  });
+  const arrowOptions = equipFilterBow!=='all' ? arrowsForBow(equipFilterBow) : [];
+
+  const spreadVals = filtered.map(x=>groupingMetrics(x.grouping).extremeSpread).filter(v=>v>0);
+  const radiusVals = filtered.map(x=>groupingMetrics(x.grouping).meanRadius);
+  const avgSpread = spreadVals.length ? spreadVals.reduce((a,v)=>a+v,0)/spreadVals.length : null;
+  const avgRadius = radiusVals.length ? radiusVals.reduce((a,v)=>a+v,0)/radiusVals.length : null;
+
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">Equipment Trends</div><button class="close" id="closeDetail">‹ Back</button></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Filter</span>
+      <label class="f-label">Bow</label>
+      <select id="bowFilter">
+        <option value="all" ${equipFilterBow==='all'?'selected':''}>All bows</option>
+        ${data.bows.map(b=>`<option value="${b.id}" ${equipFilterBow===b.id?'selected':''}>${escapeHtml(b.name)}</option>`).join('')}
+      </select>
+      <label class="f-label">Arrow setup</label>
+      <select id="arrowFilter" ${equipFilterBow==='all'?'disabled':''}>
+        <option value="all" ${equipFilterArrow==='all'?'selected':''}>All arrows for this bow</option>
+        ${arrowOptions.map(a=>`<option value="${a.id}" ${equipFilterArrow===a.id?'selected':''}>${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</option>`).join('')}
+      </select>
+    </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <div class="stat-row">
+        <div class="stat"><div class="num">${filtered.length}</div><div class="cap">GROUPINGS</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${avgSpread!==null?fmt(avgSpread,1):'—'}"</div><div class="cap">AVG GROUP SIZE</div></div>
+        <div class="stat"><div class="num" style="color:var(--olive)">${avgRadius!==null?fmt(avgRadius,1):'—'}"</div><div class="cap">AVG DIST FROM CENTER</div></div>
+      </div>
+    </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Trend for this equipment</span>
+      <div id="equipTrendHolder"><canvas id="equipTrendCanvas" height="140"></canvas></div>
+    </div>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('bowFilter').onchange = e=>{ equipFilterBow = e.target.value; equipFilterArrow='all'; renderEquipmentTrends(); };
+  document.getElementById('arrowFilter').onchange = e=>{ equipFilterArrow = e.target.value; renderEquipmentTrends(); };
+
+  const ctx = document.getElementById('equipTrendCanvas');
+  if(filtered.length===0){
+    ctx.parentElement.innerHTML = '<div class="trend-empty">No groupings logged yet for this equipment.</div>';
+    return;
+  }
+  const labels = filtered.map(x=> fmtDate(x.grouping.createdAt) + (x.grouping.distance?' · '+x.grouping.distance+'yd':''));
+  destroyChart('equipTrendCanvas');
+  charts['equipTrendCanvas'] = new Chart(ctx, {
+    type:'line',
+    data:{ labels, datasets:[
+      { label:'Extreme spread (in)', data:filtered.map(x=>groupingMetrics(x.grouping).extremeSpread), borderColor:'#E8A33D', backgroundColor:'#E8A33D', tension:0.25, pointRadius:3, borderWidth:2 },
+      { label:'Mean radius (in)', data:filtered.map(x=>groupingMetrics(x.grouping).meanRadius), borderColor:'#7FA65C', backgroundColor:'#7FA65C', tension:0.25, pointRadius:3, borderWidth:2, borderDash:[4,3] }
+    ]},
+    options:{ responsive:true,
+      plugins:{ legend:{ labels:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} } } },
+      scales:{
+        x:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:9}, maxRotation:60, minRotation:60 }, grid:{ color:'#252B1D' } },
+        y:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ color:'#252B1D' }, title:{display:true,text:'inches',color:'#8B9184',font:{family:'IBM Plex Mono',size:10}} }
+      }
+    }
+  });
+}
+
+// ---------- init ----------
+(async function init(){
+  $app.innerHTML = '<div class="empty">Loading…</div>';
+  await loadData();
+  render();
+})();
+
+})();
+</script>
+</body>
+</html>
