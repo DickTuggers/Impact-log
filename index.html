@@ -26,7 +26,7 @@
   }
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:60px;}
-  #app{max-width:520px;margin:0 auto;padding:18px 14px 40px;}
+  #app{max-width:520px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 14px 40px;}
 
   .hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border);}
   .hdr h1{font-family:var(--display);font-weight:700;font-size:30px;letter-spacing:0.5px;margin:0;}
@@ -73,8 +73,8 @@
   input::placeholder{color:var(--muted);}
   label.f-label{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--muted);letter-spacing:1px;display:block;margin-bottom:6px;}
 
-  .tap-wrap{position:relative;width:100%;max-width:480px;margin:0 auto 12px;user-select:none;}
-  .tap-wrap img{display:block;width:100%;height:auto;}
+  .tap-wrap{position:relative;width:100%;max-width:480px;margin:0 auto 12px;user-select:none;touch-action:manipulation;}
+  .tap-wrap img{display:block;width:100%;height:auto;touch-action:manipulation;}
   .tap-wrap svg{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
   .upload-box{border:2px dashed var(--border);padding:30px 16px;text-align:center;cursor:pointer;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-bottom:12px;}
   .upload-box:hover{border-color:var(--amber-dim);}
@@ -111,6 +111,10 @@
   ::selection{background:var(--amber);color:#161810;}
 
   .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel-2);border:1px solid var(--amber);color:var(--amber);font-family:var(--mono);font-size:12px;padding:8px 16px;opacity:0;transition:all .25s ease;pointer-events:none;z-index:50;}
+
+  .confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
+  .confirm-box{background:var(--panel);border:1px solid var(--amber-dim);padding:20px;max-width:340px;width:100%;}
+  .confirm-msg{font-family:var(--sans);font-size:14.5px;line-height:1.5;color:var(--text);margin-bottom:18px;white-space:pre-line;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 </style>
 </head>
@@ -124,12 +128,13 @@ const PALETTE = ['#E8A33D','#7FA65C','#5B8FA6','#C1502E','#A67FA6','#D9C25B','#5
 const DISPLAY_W = 560;
 const NUDGE = 2; // image-pixel nudge step for fine adjustment
 
-let data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [] };
+let data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [] };
 let view = { screen:'home' };
 let flow = null;
 let allImpactsFilter = null;
-let rangeMinFilter = null;
-let rangeMaxFilter = null;
+let allImpactsBowSet = null;
+let allImpactsArrowSet = null;
+let allImpactsDateRange = 'all';
 let showAvgCenter = false;
 let charts = {};
 
@@ -163,6 +168,48 @@ function toast(msg){
   toastTimer = setTimeout(()=> t.classList.remove('show'), 1400);
 }
 
+// Custom confirm dialog — native window.confirm() is unreliable inside some
+// sandboxed previews, so this app never relies on it for destructive actions.
+function showConfirm(message, opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box">
+        <div class="confirm-msg"></div>
+        <div class="btn-row">
+          <button class="btn secondary" id="confirmCancelBtn">${opts.cancelLabel||'Cancel'}</button>
+          <button class="btn danger" id="confirmOkBtn">${opts.confirmLabel||'Delete'}</button>
+        </div>
+      </div>
+    `;
+    overlay.querySelector('.confirm-msg').textContent = message;
+    document.body.appendChild(overlay);
+    const cleanup = (result)=>{ overlay.remove(); resolve(result); };
+    overlay.querySelector('#confirmCancelBtn').onclick = ()=>cleanup(false);
+    overlay.querySelector('#confirmOkBtn').onclick = ()=>cleanup(true);
+    overlay.addEventListener('click', e=>{ if(e.target===overlay) cleanup(false); });
+  });
+}
+
+function showAlert(message){
+  return new Promise(resolve=>{
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box">
+        <div class="confirm-msg"></div>
+        <div class="btn-row"><button class="btn" id="alertOkBtn">OK</button></div>
+      </div>
+    `;
+    overlay.querySelector('.confirm-msg').textContent = message;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#alertOkBtn').onclick = ()=>{ overlay.remove(); resolve(); };
+    overlay.addEventListener('click', e=>{ if(e.target===overlay){ overlay.remove(); resolve(); } });
+  });
+}
+
 // ---------- storage (on-device only) ----------
 async function loadData(){
   let raw = null;
@@ -176,11 +223,12 @@ async function loadData(){
     await saveData();
     return;
   }
-  data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [] };
+  data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [] };
 }
 function normalizeData(d){
   if(!d.bows) d.bows = [];
   if(!d.arrowSetups) d.arrowSetups = [];
+  if(!d.equipmentChanges) d.equipmentChanges = [];
   (d.sessions||[]).forEach(s=>{
     if(s.bowId===undefined) s.bowId = (s.groupings&&s.groupings[0]&&s.groupings[0].bowId) || null;
     if(s.arrowSetupId===undefined) s.arrowSetupId = (s.groupings&&s.groupings[0]&&s.groupings[0].arrowSetupId) || null;
@@ -194,7 +242,7 @@ function migrateLegacy(oldSessions){
     targetLibrary.push({ id:assetId, name:s.label||('Target — '+fmtDate(s.date)), dataUrl:s.targetImage, imgW:s.imgW, imgH:s.imgH, pixelsPerInch:s.pixelsPerInch, centerPx:s.centerPx, createdAt:s.date });
     return { id:s.id, date:s.date, label:s.label||'', targetId:assetId, groupings:[{ id:uid(), distance:null, bowId:null, arrowSetupId:null, impacts:s.impacts||[], createdAt:s.date }] };
   });
-  return { targetLibrary, sessions, bows: [], arrowSetups: [] };
+  return { targetLibrary, sessions, bows: [], arrowSetups: [], equipmentChanges: [] };
 }
 async function saveData(){
   const json = JSON.stringify(data);
@@ -203,7 +251,7 @@ async function saveData(){
     toast('Saved ✓');
   }catch(e){
     console.error('save failed', e);
-    alert("Couldn't save on this device (storage may be full or blocked). Use Export Backup right away so you don't lose this data.");
+    await showAlert("Couldn't save on this device (storage may be full or blocked). Use Export Backup right away so you don't lose this data.");
   }
 }
 
@@ -223,13 +271,13 @@ async function handleImportFile(e){
     if(!parsed || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.targetLibrary)) throw new Error('bad shape');
     const newSessions = parsed.sessions.filter(s=> !data.sessions.some(x=>x.id===s.id));
     const newAssets = parsed.targetLibrary.filter(a=> !data.targetLibrary.some(x=>x.id===a.id));
-    if(!confirm(`Add ${newSessions.length} session(s) and ${newAssets.length} target(s) from this file to your current data? (Nothing existing will be removed.)`)) { e.target.value=''; return; }
+    if(!(await showConfirm(`Add ${newSessions.length} session(s) and ${newAssets.length} target(s) from this file to your current data? Nothing existing will be removed.`, {confirmLabel:'Import'}))) { e.target.value=''; return; }
     data.sessions = data.sessions.concat(newSessions);
     data.targetLibrary = data.targetLibrary.concat(newAssets);
     await saveData();
     view = {screen:'home'};
     render();
-  }catch(err){ alert("That file doesn't look like a valid Impact Log backup."); }
+  }catch(err){ await showAlert("That file doesn't look like a valid Impact Log backup."); }
   e.target.value = '';
 }
 
@@ -265,9 +313,16 @@ function allGroupingsFlat(){
 function allImpactsFlat(){
   const out = [];
   data.sessions.forEach(s=> (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=>{
-    out.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date});
+    out.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date, bowId:s.bowId||null, arrowSetupId:s.arrowSetupId||null});
   })));
   return out;
+}
+function withinDateRange(dateStr, rangeKey){
+  if(rangeKey==='all') return true;
+  const days = {'30d':30,'3m':91,'6m':182,'1y':365}[rangeKey];
+  if(!days) return true;
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
+  return new Date(dateStr) >= cutoff;
 }
 function recomputeImpact(p, asset){
   p.dxIn = (p.xPx-asset.centerPx.x)/asset.pixelsPerInch;
@@ -296,6 +351,51 @@ function colorForDistance(d, min, max){
   if(min===max) return 'hsl(38,75%,58%)';
   const t = (d-min)/(max-min);
   return `hsl(${165-t*165},70%,55%)`;
+}
+const ARROW_SHAPES = ['square','triangle','diamond','cross','star','hexagon','pentagon'];
+function shapeForArrow(arrowSetupId){
+  if(!arrowSetupId) return 'circle';
+  const idx = data.arrowSetups.findIndex(a=>a.id===arrowSetupId);
+  if(idx<0) return 'circle';
+  return ARROW_SHAPES[idx % ARROW_SHAPES.length];
+}
+function polygonPoints(cx,cy,r,sides,rotationDeg){
+  rotationDeg = rotationDeg===undefined ? -90 : rotationDeg;
+  const pts=[];
+  for(let i=0;i<sides;i++){
+    const angle = (Math.PI*2*i/sides) + rotationDeg*Math.PI/180;
+    pts.push(`${cx+r*Math.cos(angle)},${cy+r*Math.sin(angle)}`);
+  }
+  return pts.join(' ');
+}
+function starPoints(cx,cy,rOuter,rInner,points){
+  const pts=[];
+  for(let i=0;i<points*2;i++){
+    const r = i%2===0 ? rOuter : rInner;
+    const angle = (Math.PI*i/points) - Math.PI/2;
+    pts.push(`${cx+r*Math.cos(angle)},${cy+r*Math.sin(angle)}`);
+  }
+  return pts.join(' ');
+}
+function shapeMarkerSvg(shape, x, y, r, color){
+  const common = `fill="${color}" fill-opacity="0.85" stroke="#12140F" stroke-width="1"`;
+  switch(shape){
+    case 'square': return `<rect x="${x-r}" y="${y-r}" width="${r*2}" height="${r*2}" ${common}/>`;
+    case 'triangle': return `<polygon points="${polygonPoints(x,y,r*1.25,3,-90)}" ${common}/>`;
+    case 'diamond': return `<polygon points="${x},${y-r*1.3} ${x+r*1.3},${y} ${x},${y+r*1.3} ${x-r*1.3},${y}" ${common}/>`;
+    case 'cross': {
+      const t = r*0.5;
+      return `<g ${common}><rect x="${x-t}" y="${y-r*1.3}" width="${t*2}" height="${r*2.6}"/><rect x="${x-r*1.3}" y="${y-t}" width="${r*2.6}" height="${t*2}"/></g>`;
+    }
+    case 'star': return `<polygon points="${starPoints(x,y,r*1.35,r*0.55,5)}" ${common}/>`;
+    case 'hexagon': return `<polygon points="${polygonPoints(x,y,r*1.2,6)}" ${common}/>`;
+    case 'pentagon': return `<polygon points="${polygonPoints(x,y,r*1.25,5)}" ${common}/>`;
+    default: return `<circle cx="${x}" cy="${y}" r="${r}" ${common}/>`;
+  }
+}
+function shapeIconSvg(shape, color){
+  color = color || '#8B9184';
+  return `<svg width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;margin-right:4px;">${shapeMarkerSvg(shape,12,12,9,color)}</svg>`;
 }
 function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
 function distanceOptions(selected){
@@ -329,6 +429,7 @@ function render(){
   else if(view.screen==='groupingDetail') renderGroupingDetail();
   else if(view.screen==='allImpacts') renderAllImpacts();
   else if(view.screen==='equipmentTrends') renderEquipmentTrends();
+  else if(view.screen==='equipmentChanges') renderEquipmentChanges();
 }
 
 function renderAvgImpactSvg(flatImpacts){
@@ -356,8 +457,10 @@ function renderAvgImpactSvg(flatImpacts){
 // ---------- HOME ----------
 let homeFilterBow = 'all';
 let homeFilterArrow = 'all';
+let homeDateRange = 'all';
 function sessionsMatchingHomeFilter(){
   return data.sessions.filter(s=>{
+    if(!withinDateRange(s.date, homeDateRange)) return false;
     if(homeFilterBow!=='all' && s.bowId!==homeFilterBow) return false;
     if(homeFilterBow!=='all' && homeFilterArrow!=='all' && s.arrowSetupId!==homeFilterArrow) return false;
     return true;
@@ -393,6 +496,12 @@ function renderHome(){
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Viewing</span>
+      <label class="f-label">Time range</label>
+      <div class="chip-row" id="homeDateChips">
+        ${[['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
+          `<button class="chip ${homeDateRange===k?'active':''}" data-range="${k}">${label}</button>`
+        ).join('')}
+      </div>
       <label class="f-label">Bow</label>
       <select id="homeBowFilter">
         <option value="all" ${homeFilterBow==='all'?'selected':''}>All bows</option>
@@ -437,6 +546,7 @@ function renderHome(){
     </div>
     <div class="nav-row">
       <button class="btn secondary" id="equipTrendsBtn">Equipment Trends</button>
+      <button class="btn secondary" id="equipChangesBtn">Equipment Changes</button>
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
@@ -467,10 +577,9 @@ function renderHome(){
             ${!bowUsed ? `<button class="btn small danger" data-delete-bow="${b.id}">Delete</button>` : ''}
           </div>
           ${arrows.map(a=>{
-            const arrowUsed = data.sessions.some(s=>s.arrowSetupId===a.id);
             return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 4px 14px;">
               <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">↳ ${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</span>
-              ${!arrowUsed ? `<button class="btn small danger" data-delete-arrow="${a.id}" style="font-size:10px;padding:4px 8px;">Delete</button>` : ''}
+              <button class="btn ghost" data-edit-arrow="${a.id}" style="font-size:10px;padding:4px 8px;">Edit</button>
             </div>`;
           }).join('')}
           <button class="btn ghost" data-add-arrow="${b.id}" style="margin-left:14px;">+ Add arrow setup</button>
@@ -502,17 +611,21 @@ function renderHome(){
     </div>
   `;
   document.getElementById('homeBowFilter').onchange = e=>{ homeFilterBow = e.target.value; homeFilterArrow='all'; render(); };
+  document.querySelectorAll('#homeDateChips .chip').forEach(c=>{
+    c.onclick = ()=>{ homeDateRange = c.dataset.range; render(); };
+  });
   document.getElementById('homeArrowFilter').onchange = e=>{ homeFilterArrow = e.target.value; render(); };
   document.getElementById('newSessionBtn').onclick = startNewSession;
   document.getElementById('allImpactsBtn').onclick = ()=>{ view={screen:'allImpacts'}; render(); };
   document.getElementById('equipTrendsBtn').onclick = ()=>{ view={screen:'equipmentTrends'}; render(); };
+  document.getElementById('equipChangesBtn').onclick = ()=>{ view={screen:'equipmentChanges'}; render(); };
   document.getElementById('addBowBtn').onclick = ()=> startAddBow(null);
   document.querySelectorAll('[data-add-arrow]').forEach(btn=>{
     btn.onclick = ()=> startAddArrow(btn.dataset.addArrow, null);
   });
   document.querySelectorAll('[data-delete-bow]').forEach(btn=>{
     btn.onclick = async ()=>{
-      if(!confirm('Delete this bow and its arrow setups from your equipment list?')) return;
+      if(!(await showConfirm('Delete this bow and its arrow setups from your equipment list?'))) return;
       const bowId = btn.dataset.deleteBow;
       data.arrowSetups = data.arrowSetups.filter(a=>a.bowId!==bowId);
       data.bows = data.bows.filter(b=>b.id!==bowId);
@@ -520,18 +633,13 @@ function renderHome(){
       render();
     };
   });
-  document.querySelectorAll('[data-delete-arrow]').forEach(btn=>{
-    btn.onclick = async ()=>{
-      if(!confirm('Delete this arrow setup?')) return;
-      data.arrowSetups = data.arrowSetups.filter(a=>a.id!==btn.dataset.deleteArrow);
-      await saveData();
-      render();
-    };
+  document.querySelectorAll('[data-edit-arrow]').forEach(btn=>{
+    btn.onclick = ()=> startEditArrow(btn.dataset.editArrow);
   });
   document.getElementById('addTargetBtn').onclick = startAddTarget;
   document.querySelectorAll('[data-delete-asset]').forEach(btn=>{
     btn.onclick = async ()=>{
-      if(!confirm('Delete this target from your library?')) return;
+      if(!(await showConfirm('Delete this target from your library?'))) return;
       data.targetLibrary = data.targetLibrary.filter(a=>a.id!==btn.dataset.deleteAsset);
       await saveData();
       render();
@@ -622,6 +730,12 @@ function startAddArrow(bowId, returnFlow){
   view = {screen:'newSession'};
   render();
 }
+function startEditArrow(arrowId){
+  const arrow = getArrowSetup(arrowId);
+  flow = { mode:'editArrow', step:'editArrow', arrowId, arrowName:arrow.name, arrowWeight: arrow.weight!=null?String(arrow.weight):'' };
+  view = {screen:'newSession'};
+  render();
+}
 function cancelFlow(){
   const goTo = (flow && flow.sessionId) ? {screen:'sessionDetail', id:flow.sessionId} : {screen:'home'};
   flow=null; view=goTo; render();
@@ -630,18 +744,18 @@ function renderFlow(){
   const stepNames = {
     chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
     calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
-    nameBow:'Add bow', nameArrow:'Add arrow setup'
+    nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup'
   };
   $app.innerHTML = `
     <div class="flow-hdr"><div class="step-label">${stepNames[flow.step]}</div>
     <button class="close" id="closeFlow">‹ Back</button></div>
     <div id="flowBody"></div>
   `;
-  document.getElementById('closeFlow').onclick = ()=>{
+  document.getElementById('closeFlow').onclick = async ()=>{
     if(flow.step==='savedPrompt'){ cancelFlow(); return; }
-    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget'];
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow'];
     const isTrivial = trivialSteps.includes(flow.step);
-    if(!isTrivial && !confirm('Discard unsaved changes?')) return;
+    if(!isTrivial && !(await showConfirm('Discard unsaved changes?', {confirmLabel:'Discard'}))) return;
     if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
     else cancelFlow();
   };
@@ -654,6 +768,7 @@ function renderFlow(){
   else if(flow.step==='savedPrompt') renderSavedPrompt(body);
   else if(flow.step==='nameBow') renderNameBowStep(body);
   else if(flow.step==='nameArrow') renderNameArrowStep(body);
+  else if(flow.step==='editArrow') renderEditArrowStep(body);
 }
 function renderChooseEquipmentStep(body){
   body.innerHTML = `
@@ -669,6 +784,12 @@ function renderChooseEquipmentStep(body){
       ${flow.bowId ? arrowsForBow(flow.bowId).map(a=>`<option value="${a.id}" ${flow.arrowSetupId===a.id?'selected':''}>${escapeHtml(a.name)}${a.weight?' · '+a.weight+'gr':''}</option>`).join('') : ''}
     </select>
     <button class="btn ghost" id="manageEquipBtn" type="button">+ Add bow / arrow setup</button>
+    <label class="legend-item" style="margin-top:14px;cursor:pointer;">
+      <input type="checkbox" id="equipChangedCheck" ${flow.equipChanged?'checked':''} style="margin-right:6px;">
+      I made equipment changes for this session
+    </label>
+    ${flow.equipChanged ? `<label class="f-label" style="margin-top:10px;">What changed?</label>
+      <textarea id="equipChangeNote" rows="3" style="width:100%;background:var(--panel-2);border:1px solid var(--border);color:var(--text);font-family:var(--sans);font-size:14px;padding:10px 12px;margin-bottom:10px;" placeholder="e.g. Switched to 150gr broadheads, new rest, resighted at 20yd">${escapeHtml(flow.equipChangeNote||'')}</textarea>` : ''}
     <button class="btn" id="continueBtn" style="margin-top:10px;">Continue</button>
   `;
   document.getElementById('bowInput').onchange = e=>{ flow.bowId = e.target.value||null; flow.arrowSetupId = null; renderChooseEquipmentStep(body); };
@@ -677,7 +798,13 @@ function renderChooseEquipmentStep(body){
     if(flow.bowId) startAddArrow(flow.bowId, flow);
     else startAddBow(flow);
   };
-  document.getElementById('continueBtn').onclick = ()=>{ flow.step='capture'; render(); };
+  document.getElementById('equipChangedCheck').onchange = e=>{ flow.equipChanged = e.target.checked; renderChooseEquipmentStep(body); };
+  const noteEl = document.getElementById('equipChangeNote');
+  if(noteEl) noteEl.oninput = e=>{ flow.equipChangeNote = e.target.value; };
+  document.getElementById('continueBtn').onclick = async ()=>{
+    if(flow.equipChanged && !(flow.equipChangeNote||'').trim()){ await showAlert('Add a quick note on what changed, or uncheck the box.'); return; }
+    flow.step='capture'; render();
+  };
 }
 function renderNameBowStep(body){
   body.innerHTML = `
@@ -688,7 +815,7 @@ function renderNameBowStep(body){
   `;
   document.getElementById('bowNameInput').oninput = e=>{ flow.bowName = e.target.value; };
   document.getElementById('saveBowBtn').onclick = async ()=>{
-    if(!flow.bowName.trim()){ alert('Enter a name for this bow.'); return; }
+    if(!flow.bowName.trim()){ await showAlert('Enter a name for this bow.'); return; }
     const bow = { id:uid(), name:flow.bowName.trim(), createdAt:new Date().toISOString() };
     data.bows.push(bow);
     await saveData();
@@ -701,6 +828,47 @@ function renderNameBowStep(body){
       flow = null; view = {screen:'home'};
     }
     render();
+  };
+}
+function renderEditArrowStep(body){
+  const arrow = getArrowSetup(flow.arrowId);
+  if(!arrow){ flow=null; view={screen:'home'}; render(); return; }
+  const bow = arrow.bowId ? getBow(arrow.bowId) : null;
+  const usingSessions = data.sessions.filter(s=>s.arrowSetupId===arrow.id);
+  const usedCount = usingSessions.length;
+  const shotCount = usingSessions.reduce((a,s)=>a+(s.groupings||[]).reduce((b,g)=>b+(g.impacts?.length||0),0),0);
+  body.innerHTML = `
+    <p class="instr">Editing arrow setup for <b>${escapeHtml(bow?bow.name:'this bow')}</b>.</p>
+    <label class="f-label">Arrow setup name</label>
+    <input type="text" id="arrowNameInput" placeholder="e.g. Easton 4mm, 100gr tip" value="${escapeHtml(flow.arrowName)}">
+    <label class="f-label">Total arrow weight in grains (optional)</label>
+    <input type="number" id="arrowWeightInput" placeholder="e.g. 420" value="${escapeHtml(flow.arrowWeight)}">
+    <button class="btn" id="saveArrowBtn">Save changes</button>
+    <div style="margin-top:22px;padding-top:16px;border-top:1px solid var(--border);">
+      ${usedCount>0 ? `<p class="instr" style="color:var(--rust);margin-bottom:10px;">This arrow setup is used in ${usedCount} session${usedCount!==1?'s':''} (${shotCount} logged shot${shotCount!==1?'s':''}). Deleting it will permanently delete ${usedCount!==1?'those sessions':'that session'} and all their data too.</p>` : ''}
+      <button class="btn danger" id="deleteArrowBtn">Delete arrow setup</button>
+    </div>
+  `;
+  document.getElementById('arrowNameInput').oninput = e=>{ flow.arrowName = e.target.value; };
+  document.getElementById('arrowWeightInput').oninput = e=>{ flow.arrowWeight = e.target.value; };
+  document.getElementById('saveArrowBtn').onclick = async ()=>{
+    if(!flow.arrowName.trim()){ await showAlert('Enter a name for this arrow setup.'); return; }
+    arrow.name = flow.arrowName.trim();
+    arrow.weight = flow.arrowWeight ? parseFloat(flow.arrowWeight) : null;
+    await saveData();
+    flow = null; view = {screen:'home'}; render();
+  };
+  document.getElementById('deleteArrowBtn').onclick = async ()=>{
+    const msg = usedCount>0
+      ? `Delete "${arrow.name}"? This will also permanently delete ${usedCount} session${usedCount!==1?'s':''} and ${shotCount} logged shot${shotCount!==1?'s':''}. This cannot be undone.`
+      : `Delete "${arrow.name}"? This cannot be undone.`;
+    if(!(await showConfirm(msg))) return;
+    const deletedSessionIds = new Set(usingSessions.map(s=>s.id));
+    data.sessions = data.sessions.filter(s=>s.arrowSetupId!==arrow.id);
+    data.arrowSetups = data.arrowSetups.filter(a=>a.id!==arrow.id);
+    data.equipmentChanges = data.equipmentChanges.filter(c=> c.arrowSetupId!==arrow.id && !deletedSessionIds.has(c.sessionId));
+    await saveData();
+    flow = null; view = {screen:'home'}; render();
   };
 }
 function renderNameArrowStep(body){
@@ -716,7 +884,7 @@ function renderNameArrowStep(body){
   document.getElementById('arrowNameInput').oninput = e=>{ flow.arrowName = e.target.value; };
   document.getElementById('arrowWeightInput').oninput = e=>{ flow.arrowWeight = e.target.value; };
   document.getElementById('saveArrowBtn').onclick = async ()=>{
-    if(!flow.arrowName.trim()){ alert('Enter a name for this arrow setup.'); return; }
+    if(!flow.arrowName.trim()){ await showAlert('Enter a name for this arrow setup.'); return; }
     const arrow = { id:uid(), bowId:flow.bowId, name:flow.arrowName.trim(), weight: flow.arrowWeight?parseFloat(flow.arrowWeight):null, createdAt:new Date().toISOString() };
     data.arrowSetups.push(arrow);
     await saveData();
@@ -810,9 +978,9 @@ function renderCalibrateStep(body){
   };
   document.getElementById('resetPts').onclick = ()=>{ d.calibPoints=[]; d.selectedCalibIndex=null; renderCalibrateStep(body); };
   if(d.calibPoints.length===2){
-    document.getElementById('confirmCalib').onclick = ()=>{
+    document.getElementById('confirmCalib').onclick = async ()=>{
       const val = parseFloat(document.getElementById('realDist').value);
-      if(!val||val<=0){ alert('Enter a distance greater than 0.'); return; }
+      if(!val||val<=0){ await showAlert('Enter a distance greater than 0.'); return; }
       const [a,b] = d.calibPoints;
       d.pixelsPerInch = Math.hypot(a.x-b.x,a.y-b.y)/val;
       flow.step = 'center'; render();
@@ -936,13 +1104,16 @@ function renderCaptureStep(body){
   };
   document.getElementById('confirmBtn').onclick = async ()=>{
     const distVal = flow.distanceValue==='custom' ? parseFloat(flow.customDistance) : parseFloat(document.getElementById('distInput').value);
-    if(!distVal || distVal<=0){ alert('Select or enter the shooting distance for this grouping.'); return; }
+    if(!distVal || distVal<=0){ await showAlert('Select or enter the shooting distance for this grouping.'); return; }
     const grouping = { id:uid(), distance:distVal, impacts:flow.impacts, createdAt:new Date().toISOString() };
     if(flow.mode==='newSession'){
       const session = { id:uid(), date:new Date().toISOString(), label:flow.sessionLabel||'', targetId:flow.targetId, bowId:flow.bowId||null, arrowSetupId:flow.arrowSetupId||null, groupings:[grouping] };
       data.sessions.push(session);
       flow.sessionId = session.id;
       flow.mode = 'addGrouping';
+      if(flow.equipChanged && (flow.equipChangeNote||'').trim()){
+        data.equipmentChanges.push({ id:uid(), date:session.date, note:flow.equipChangeNote.trim(), sessionId:session.id, bowId:flow.bowId||null, arrowSetupId:flow.arrowSetupId||null });
+      }
     } else {
       const s = getSession(flow.sessionId);
       s.groupings.push(grouping);
@@ -1040,7 +1211,7 @@ function renderSessionDetail(){
     el.onclick = ()=>{ view={screen:'groupingDetail', sessionId:s.id, groupingId:el.dataset.gid}; render(); };
   });
   document.getElementById('deleteSessionBtn').onclick = async ()=>{
-    if(!confirm('Delete this session and all its groupings? The saved target photo stays in your library.')) return;
+    if(!(await showConfirm('Delete this session and all its groupings? The saved target photo stays in your library.'))) return;
     data.sessions = data.sessions.filter(x=>x.id!==s.id);
     await saveData();
     view={screen:'home'}; render();
@@ -1079,11 +1250,35 @@ function renderGroupingDetail(){
       <span class="label">Distance from center by arrow</span>
       <canvas id="arrowChart" height="140"></canvas>
     </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Individual arrows</span>
+      ${(g.impacts||[]).length===0 ? '<div class="empty">No arrows in this grouping.</div>' :
+        g.impacts.map(p=>`
+          <div class="row-item" style="cursor:default;flex-wrap:wrap;gap:8px;">
+            <div class="t1">Arrow ${p.order}</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div class="metric">${fmt(p.distIn,2)}<span class="u">" from center</span></div>
+              <button class="btn small danger" data-delete-impact="${p.order}">Delete</button>
+            </div>
+          </div>
+        `).join('')
+      }
+    </div>
     <button class="btn danger" id="deleteGroupingBtn">Delete grouping</button>
   `;
   document.getElementById('closeDetail').onclick = ()=>{ view={screen:'sessionDetail', id:s.id}; render(); };
+  document.querySelectorAll('[data-delete-impact]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const order = parseInt(btn.dataset.deleteImpact);
+      if(!(await showConfirm(`Delete arrow ${order}? This cannot be undone.`))) return;
+      g.impacts = g.impacts.filter(p=>p.order!==order);
+      g.impacts.forEach((p,i)=>{ p.order = i+1; });
+      await saveData();
+      render();
+    };
+  });
   document.getElementById('deleteGroupingBtn').onclick = async ()=>{
-    if(!confirm('Delete this grouping?')) return;
+    if(!(await showConfirm('Delete this grouping?'))) return;
     s.groupings = s.groupings.filter(x=>x.id!==g.id);
     await saveData();
     view={screen:'sessionDetail', id:s.id}; render();
@@ -1104,7 +1299,16 @@ function renderGroupingDetail(){
 
 // ---------- ALL IMPACTS ----------
 function renderAllImpacts(){
-  const flat = allImpactsFlat();
+  const dateFiltered = allImpactsFlat().filter(p=>withinDateRange(p.date, allImpactsDateRange));
+
+  const presentBowIds = [...new Set(dateFiltered.map(p=>p.bowId))];
+  if(allImpactsBowSet===null) allImpactsBowSet = new Set(presentBowIds);
+  const bowFiltered = dateFiltered.filter(p=> allImpactsBowSet.has(p.bowId));
+
+  const presentArrowIds = [...new Set(bowFiltered.map(p=>p.arrowSetupId))];
+  if(allImpactsArrowSet===null) allImpactsArrowSet = new Set(presentArrowIds);
+  const flat = bowFiltered.filter(p=> allImpactsArrowSet.has(p.arrowSetupId));
+
   const distances = [...new Set(flat.map(p=>p.distance).filter(d=>d!=null))].sort((a,b)=>a-b);
   if(allImpactsFilter===null) allImpactsFilter = new Set(distances);
   const minD = distances[0], maxD = distances[distances.length-1];
@@ -1126,7 +1330,7 @@ function renderAllImpacts(){
           <line x1="${cx}" y1="${cy-8}" x2="${cx}" y2="${cy+8}" stroke="#E8A33D" stroke-width="1"/>`;
   visible.forEach(p=>{
     const color = p.distance==null ? '#8B9184' : colorForDistance(p.distance, minD, maxD);
-    svg += `<circle cx="${cx+p.dxIn*pxPerIn}" cy="${cy+p.dyIn*pxPerIn}" r="4.5" fill="${color}" fill-opacity="0.85" stroke="#12140F" stroke-width="1"/>`;
+    svg += shapeMarkerSvg(shapeForArrow(p.arrowSetupId), cx+p.dxIn*pxPerIn, cy+p.dyIn*pxPerIn, 4.5, color);
   });
   if(showAvgCenter && visible.length){
     const avgDx = visible.reduce((a,p)=>a+p.dxIn,0)/visible.length;
@@ -1140,10 +1344,25 @@ function renderAllImpacts(){
   }
   svg += `</svg>`;
 
-  const legend = distances.map(dist=>{
+  const distanceLegend = distances.map(dist=>{
     const count = flat.filter(p=>p.distance===dist).length;
     const on = allImpactsFilter.has(dist);
     return `<div class="legend-item ${on?'':'off'}" data-dist="${dist}"><span class="swatch" style="background:${colorForDistance(dist,minD,maxD)}"></span>${dist}yd · ${count}</div>`;
+  }).join('');
+
+  const bowChips = presentBowIds.map(bid=>{
+    const bow = bid ? getBow(bid) : null;
+    const label = bow ? bow.name : 'No bow';
+    const on = allImpactsBowSet.has(bid);
+    return `<button class="chip ${on?'active':''}" data-bow="${bid===null?'__none__':bid}">${escapeHtml(label)}</button>`;
+  }).join('');
+
+  const arrowChips = presentArrowIds.map(aid=>{
+    const arrow = aid ? getArrowSetup(aid) : null;
+    const label = arrow ? (arrow.name + (arrow.weight?' · '+arrow.weight+'gr':'')) : 'No arrow setup';
+    const shape = shapeForArrow(aid);
+    const on = allImpactsArrowSet.has(aid);
+    return `<button class="chip ${on?'active':''}" data-arrow="${aid===null?'__none__':aid}">${shapeIconSvg(shape, on?'#E8A33D':'#8B9184')}${escapeHtml(label)}</button>`;
   }).join('');
 
   const overallM = (()=>{
@@ -1160,17 +1379,31 @@ function renderAllImpacts(){
   $app.innerHTML = `
     <div class="flow-hdr"><div class="step-label">All Impacts</div><button class="close" id="closeDetail">‹ Back</button></div>
     <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Composite grouping — color coded by distance</span>
+      <span class="label">Time range</span>
+      <div class="chip-row" id="dateRangeChips">
+        ${[['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
+          `<button class="chip ${allImpactsDateRange===k?'active':''}" data-range="${k}">${label}</button>`
+        ).join('')}
+      </div>
+      <label class="f-label">Bows (tap to toggle, multiple allowed)</label>
+      <div class="chip-row" id="bowChips">
+        ${presentBowIds.length>1 ? `<button class="chip ${allImpactsBowSet.size===presentBowIds.length?'active':''}" id="bowAllChip">All bows</button>` : ''}
+        ${bowChips}
+      </div>
+      <label class="f-label">Arrow setups (tap to toggle, multiple allowed — shape shown on chart)</label>
+      <div class="chip-row" id="arrowChips">
+        ${presentArrowIds.length>1 ? `<button class="chip ${allImpactsArrowSet.size===presentArrowIds.length?'active':''}" id="arrowAllChip">All arrows</button>` : ''}
+        ${arrowChips}
+      </div>
+    </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Composite grouping — color = distance, shape = arrow setup</span>
       ${svg}
       <button class="btn secondary small" id="toggleAvgCenter" style="margin-top:10px;">${showAvgCenter?'✓ ':''}Show average center</button>
-      <div style="display:flex;gap:8px;align-items:flex-end;margin-top:12px;">
-        <div style="flex:1;"><label class="f-label">Min yd</label><input type="number" id="minYd" placeholder="Min" style="margin-bottom:0;" value="${rangeMinFilter!==null?rangeMinFilter:''}"></div>
-        <div style="flex:1;"><label class="f-label">Max yd</label><input type="number" id="maxYd" placeholder="Max" style="margin-bottom:0;" value="${rangeMaxFilter!==null?rangeMaxFilter:''}"></div>
-        <button class="btn secondary small" id="applyRange">Apply</button>
-      </div>
-      <div class="legend" style="margin-top:12px;">
-        ${distances.length? `<div class="legend-item ${allImpactsFilter.size===distances.length?'':'off'}" id="filterAll">All distances</div>` : ''}
-        ${legend}
+      <label class="f-label" style="margin-top:14px;">Yardage</label>
+      <div class="legend">
+        ${distances.length? `<div class="legend-item ${allImpactsFilter.size===distances.length?'':'off'}" id="filterAll">All yardages</div>` : ''}
+        ${distanceLegend}
       </div>
     </div>
     ${overallM ? `<div class="panel"><span class="bl"></span><span class="br"></span>
@@ -1183,16 +1416,31 @@ function renderAllImpacts(){
   `;
   document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
   document.getElementById('toggleAvgCenter').onclick = ()=>{ showAvgCenter = !showAvgCenter; renderAllImpacts(); };
-  document.getElementById('applyRange').onclick = ()=>{
-    const minVal = document.getElementById('minYd').value;
-    const maxVal = document.getElementById('maxYd').value;
-    rangeMinFilter = minVal===''? null : parseFloat(minVal);
-    rangeMaxFilter = maxVal===''? null : parseFloat(maxVal);
-    allImpactsFilter = new Set(distances.filter(d=> (rangeMinFilter===null||d>=rangeMinFilter) && (rangeMaxFilter===null||d<=rangeMaxFilter)));
-    renderAllImpacts();
-  };
+  document.querySelectorAll('#dateRangeChips .chip').forEach(c=>{
+    c.onclick = ()=>{ allImpactsDateRange = c.dataset.range; allImpactsBowSet=null; allImpactsArrowSet=null; allImpactsFilter=null; renderAllImpacts(); };
+  });
+  const bowAllChip = document.getElementById('bowAllChip');
+  if(bowAllChip) bowAllChip.onclick = ()=>{ allImpactsBowSet = new Set(presentBowIds); allImpactsArrowSet=null; allImpactsFilter=null; renderAllImpacts(); };
+  document.querySelectorAll('[data-bow]').forEach(el=>{
+    el.onclick = ()=>{
+      const key = el.dataset.bow==='__none__' ? null : el.dataset.bow;
+      if(allImpactsBowSet.has(key)) allImpactsBowSet.delete(key); else allImpactsBowSet.add(key);
+      allImpactsArrowSet = null; allImpactsFilter = null;
+      renderAllImpacts();
+    };
+  });
+  const arrowAllChip = document.getElementById('arrowAllChip');
+  if(arrowAllChip) arrowAllChip.onclick = ()=>{ allImpactsArrowSet = new Set(presentArrowIds); allImpactsFilter=null; renderAllImpacts(); };
+  document.querySelectorAll('[data-arrow]').forEach(el=>{
+    el.onclick = ()=>{
+      const key = el.dataset.arrow==='__none__' ? null : el.dataset.arrow;
+      if(allImpactsArrowSet.has(key)) allImpactsArrowSet.delete(key); else allImpactsArrowSet.add(key);
+      allImpactsFilter = null;
+      renderAllImpacts();
+    };
+  });
   const allBtn = document.getElementById('filterAll');
-  if(allBtn) allBtn.onclick = ()=>{ allImpactsFilter = new Set(distances); rangeMinFilter=null; rangeMaxFilter=null; renderAllImpacts(); };
+  if(allBtn) allBtn.onclick = ()=>{ allImpactsFilter = new Set(distances); renderAllImpacts(); };
   document.querySelectorAll('[data-dist]').forEach(el=>{
     el.onclick = ()=>{
       const d = parseFloat(el.dataset.dist);
@@ -1270,6 +1518,78 @@ function renderEquipmentTrends(){
         y:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ color:'#252B1D' }, title:{display:true,text:'inches',color:'#8B9184',font:{family:'IBM Plex Mono',size:10}} }
       }
     }
+  });
+}
+
+// ---------- EQUIPMENT CHANGES ----------
+let expandedChangeId = null;
+function computeChangeComparison(change){
+  const changeDate = new Date(change.date);
+  const sameBowChanges = data.equipmentChanges.filter(c=>c.bowId===change.bowId).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const idx = sameBowChanges.findIndex(c=>c.id===change.id);
+  const nextChange = sameBowChanges[idx+1];
+  const afterEnd = nextChange ? new Date(nextChange.date) : new Date();
+
+  const allG = allGroupingsFlat().filter(x=> change.bowId ? x.session.bowId===change.bowId : true);
+  const before = allG.filter(x=> new Date(x.grouping.createdAt) < changeDate);
+  const after = allG.filter(x=> new Date(x.grouping.createdAt) >= changeDate && new Date(x.grouping.createdAt) < afterEnd);
+
+  function aggregate(list){
+    const withShots = list.filter(x=>(x.grouping.impacts||[]).length>0);
+    if(!withShots.length) return null;
+    const spreads = withShots.map(x=>groupingMetrics(x.grouping).extremeSpread).filter(v=>v>0);
+    const radii = withShots.map(x=>groupingMetrics(x.grouping).meanRadius);
+    return {
+      groupings: withShots.length,
+      avgSpread: spreads.length ? spreads.reduce((a,v)=>a+v,0)/spreads.length : null,
+      avgRadius: radii.reduce((a,v)=>a+v,0)/radii.length
+    };
+  }
+  return { before: aggregate(before), after: aggregate(after) };
+}
+function renderEquipmentChanges(){
+  const sorted = [...data.equipmentChanges].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">Equipment Changes</div><button class="close" id="closeDetail">‹ Back</button></div>
+    <p class="instr">A log of gear changes you noted when starting sessions, with before/after impact comparisons for the same bow.</p>
+    ${sorted.length===0 ? '<div class="empty">No equipment changes logged yet. You can note one the next time you start a new session.</div>' :
+      sorted.map(c=>{
+        const bow = c.bowId ? getBow(c.bowId) : null;
+        const arrow = c.arrowSetupId ? getArrowSetup(c.arrowSetupId) : null;
+        const equipLabel = [bow?bow.name:null, arrow?arrow.name:null].filter(Boolean).join(' · ') || 'No equipment set';
+        const expanded = expandedChangeId===c.id;
+        let compareHtml = '';
+        if(expanded){
+          const cmp = computeChangeComparison(c);
+          compareHtml = `<div class="stat-row" style="margin-top:12px;">
+            <div class="stat">
+              <div class="cap" style="margin-bottom:6px;">BEFORE</div>
+              <div class="num" style="color:var(--muted)">${cmp.before?fmt(cmp.before.avgSpread??0,1)+'"':'—'}</div>
+              <div class="cap">AVG SPREAD · ${cmp.before?cmp.before.groupings:0} groupings</div>
+            </div>
+            <div class="stat">
+              <div class="cap" style="margin-bottom:6px;">AFTER</div>
+              <div class="num" style="color:var(--amber)">${cmp.after?fmt(cmp.after.avgSpread??0,1)+'"':'—'}</div>
+              <div class="cap">AVG SPREAD · ${cmp.after?cmp.after.groupings:0} groupings</div>
+            </div>
+          </div>
+          <div class="stat-row" style="margin-top:10px;">
+            <div class="stat"><div class="num" style="color:var(--muted)">${cmp.before?fmt(cmp.before.avgRadius,1)+'"':'—'}</div><div class="cap">BEFORE · AVG DIST FROM CENTER</div></div>
+            <div class="stat"><div class="num" style="color:var(--amber)">${cmp.after?fmt(cmp.after.avgRadius,1)+'"':'—'}</div><div class="cap">AFTER · AVG DIST FROM CENTER</div></div>
+          </div>`;
+        }
+        return `<div class="panel" data-change="${c.id}" style="cursor:pointer;"><span class="bl"></span><span class="br"></span>
+          <div class="t1">${fmtDate(c.date)}</div>
+          <div class="t2" style="margin-bottom:8px;">${escapeHtml(equipLabel)}</div>
+          <div class="instr" style="margin-bottom:0;">${escapeHtml(c.note)}</div>
+          ${compareHtml}
+        </div>`;
+      }).join('')
+    }
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.querySelectorAll('[data-change]').forEach(el=>{
+    el.onclick = ()=>{ expandedChangeId = expandedChangeId===el.dataset.change ? null : el.dataset.change; renderEquipmentChanges(); };
   });
 }
 
