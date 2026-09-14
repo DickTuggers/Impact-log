@@ -25,7 +25,7 @@
     --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:60px;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:60px;touch-action:manipulation;}
   #app{max-width:520px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 14px 40px;}
 
   .hdr{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border);}
@@ -102,7 +102,8 @@
   .adjuster{display:flex;flex-direction:column;align-items:center;gap:6px;margin:4px 0 14px;padding:12px;border:1px solid var(--border);background:var(--panel-2);}
   .adj-label{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;}
   .adj-grid{display:grid;grid-template-columns:38px 38px 38px;grid-template-rows:38px 38px 38px;gap:4px;}
-  .adj-btn{background:var(--panel);border:1px solid var(--amber-dim);color:var(--amber);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .adj-btn{background:var(--panel);border:1px solid var(--amber-dim);color:var(--amber);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;touch-action:manipulation;}
+  .adjuster{touch-action:manipulation;}
   .adj-btn:active{background:var(--amber);color:#161810;}
   .adj-dot{display:flex;align-items:center;justify-content:center;color:var(--muted);}
 
@@ -271,9 +272,15 @@ async function handleImportFile(e){
     if(!parsed || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.targetLibrary)) throw new Error('bad shape');
     const newSessions = parsed.sessions.filter(s=> !data.sessions.some(x=>x.id===s.id));
     const newAssets = parsed.targetLibrary.filter(a=> !data.targetLibrary.some(x=>x.id===a.id));
-    if(!(await showConfirm(`Add ${newSessions.length} session(s) and ${newAssets.length} target(s) from this file to your current data? Nothing existing will be removed.`, {confirmLabel:'Import'}))) { e.target.value=''; return; }
+    const newBows = (parsed.bows||[]).filter(b=> !data.bows.some(x=>x.id===b.id));
+    const newArrows = (parsed.arrowSetups||[]).filter(a=> !data.arrowSetups.some(x=>x.id===a.id));
+    const newChanges = (parsed.equipmentChanges||[]).filter(c=> !data.equipmentChanges.some(x=>x.id===c.id));
+    if(!(await showConfirm(`Add ${newSessions.length} session(s), ${newAssets.length} target(s), ${newBows.length} bow(s), and ${newArrows.length} arrow setup(s) from this file to your current data? Nothing existing will be removed.`, {confirmLabel:'Import'}))) { e.target.value=''; return; }
     data.sessions = data.sessions.concat(newSessions);
     data.targetLibrary = data.targetLibrary.concat(newAssets);
+    data.bows = data.bows.concat(newBows);
+    data.arrowSetups = data.arrowSetups.concat(newArrows);
+    data.equipmentChanges = data.equipmentChanges.concat(newChanges);
     await saveData();
     view = {screen:'home'};
     render();
@@ -319,7 +326,11 @@ function allImpactsFlat(){
 }
 function withinDateRange(dateStr, rangeKey){
   if(rangeKey==='all') return true;
-  const days = {'30d':30,'3m':91,'6m':182,'1y':365}[rangeKey];
+  if(rangeKey==='24h'){
+    const cutoff = new Date(Date.now() - 24*60*60*1000);
+    return new Date(dateStr) >= cutoff;
+  }
+  const days = {'7d':7,'30d':30,'3m':91,'6m':182,'1y':365}[rangeKey];
   if(!days) return true;
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
   return new Date(dateStr) >= cutoff;
@@ -352,12 +363,12 @@ function colorForDistance(d, min, max){
   const t = (d-min)/(max-min);
   return `hsl(${165-t*165},70%,55%)`;
 }
-const ARROW_SHAPES = ['square','triangle','diamond','cross','star','hexagon','pentagon'];
-function shapeForArrow(arrowSetupId){
-  if(!arrowSetupId) return 'circle';
+const ARROW_SYMBOLS = ['dot','ring','plus','x','square','triangle','line'];
+function symbolForArrow(arrowSetupId){
+  if(!arrowSetupId) return null;
   const idx = data.arrowSetups.findIndex(a=>a.id===arrowSetupId);
-  if(idx<0) return 'circle';
-  return ARROW_SHAPES[idx % ARROW_SHAPES.length];
+  if(idx<0) return null;
+  return ARROW_SYMBOLS[idx % ARROW_SYMBOLS.length];
 }
 function polygonPoints(cx,cy,r,sides,rotationDeg){
   rotationDeg = rotationDeg===undefined ? -90 : rotationDeg;
@@ -368,34 +379,25 @@ function polygonPoints(cx,cy,r,sides,rotationDeg){
   }
   return pts.join(' ');
 }
-function starPoints(cx,cy,rOuter,rInner,points){
-  const pts=[];
-  for(let i=0;i<points*2;i++){
-    const r = i%2===0 ? rOuter : rInner;
-    const angle = (Math.PI*i/points) - Math.PI/2;
-    pts.push(`${cx+r*Math.cos(angle)},${cy+r*Math.sin(angle)}`);
+function circleWithSymbolSvg(x, y, r, color, symbol){
+  let s = `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1"/>`;
+  if(!symbol) return s;
+  const ir = r*0.45;
+  const mark = '#12140F';
+  switch(symbol){
+    case 'dot': s += `<circle cx="${x}" cy="${y}" r="${ir}" fill="${mark}"/>`; break;
+    case 'ring': s += `<circle cx="${x}" cy="${y}" r="${ir}" fill="none" stroke="${mark}" stroke-width="1"/>`; break;
+    case 'plus': s += `<line x1="${x-ir}" y1="${y}" x2="${x+ir}" y2="${y}" stroke="${mark}" stroke-width="1.3"/><line x1="${x}" y1="${y-ir}" x2="${x}" y2="${y+ir}" stroke="${mark}" stroke-width="1.3"/>`; break;
+    case 'x': { const d=ir*0.75; s += `<line x1="${x-d}" y1="${y-d}" x2="${x+d}" y2="${y+d}" stroke="${mark}" stroke-width="1.3"/><line x1="${x-d}" y1="${y+d}" x2="${x+d}" y2="${y-d}" stroke="${mark}" stroke-width="1.3"/>`; break; }
+    case 'square': s += `<rect x="${x-ir*0.8}" y="${y-ir*0.8}" width="${ir*1.6}" height="${ir*1.6}" fill="${mark}"/>`; break;
+    case 'triangle': s += `<polygon points="${polygonPoints(x,y,ir*1.15,3,-90)}" fill="${mark}"/>`; break;
+    case 'line': s += `<line x1="${x-ir}" y1="${y}" x2="${x+ir}" y2="${y}" stroke="${mark}" stroke-width="1.5"/>`; break;
   }
-  return pts.join(' ');
+  return s;
 }
-function shapeMarkerSvg(shape, x, y, r, color){
-  const common = `fill="${color}" fill-opacity="0.85" stroke="#12140F" stroke-width="1"`;
-  switch(shape){
-    case 'square': return `<rect x="${x-r}" y="${y-r}" width="${r*2}" height="${r*2}" ${common}/>`;
-    case 'triangle': return `<polygon points="${polygonPoints(x,y,r*1.25,3,-90)}" ${common}/>`;
-    case 'diamond': return `<polygon points="${x},${y-r*1.3} ${x+r*1.3},${y} ${x},${y+r*1.3} ${x-r*1.3},${y}" ${common}/>`;
-    case 'cross': {
-      const t = r*0.5;
-      return `<g ${common}><rect x="${x-t}" y="${y-r*1.3}" width="${t*2}" height="${r*2.6}"/><rect x="${x-r*1.3}" y="${y-t}" width="${r*2.6}" height="${t*2}"/></g>`;
-    }
-    case 'star': return `<polygon points="${starPoints(x,y,r*1.35,r*0.55,5)}" ${common}/>`;
-    case 'hexagon': return `<polygon points="${polygonPoints(x,y,r*1.2,6)}" ${common}/>`;
-    case 'pentagon': return `<polygon points="${polygonPoints(x,y,r*1.25,5)}" ${common}/>`;
-    default: return `<circle cx="${x}" cy="${y}" r="${r}" ${common}/>`;
-  }
-}
-function shapeIconSvg(shape, color){
+function symbolIconSvg(symbol, color){
   color = color || '#8B9184';
-  return `<svg width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;margin-right:4px;">${shapeMarkerSvg(shape,12,12,9,color)}</svg>`;
+  return `<svg width="12" height="12" viewBox="0 0 24 24" style="vertical-align:-2px;margin-right:4px;">${circleWithSymbolSvg(12,12,9,color,symbol)}</svg>`;
 }
 function destroyChart(id){ if(charts[id]){ charts[id].destroy(); delete charts[id]; } }
 function distanceOptions(selected){
@@ -498,7 +500,7 @@ function renderHome(){
       <span class="label">Viewing</span>
       <label class="f-label">Time range</label>
       <div class="chip-row" id="homeDateChips">
-        ${[['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
+        ${[['24h','24 hours'],['7d','7 days'],['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
           `<button class="chip ${homeDateRange===k?'active':''}" data-range="${k}">${label}</button>`
         ).join('')}
       </div>
@@ -1322,15 +1324,16 @@ function renderAllImpacts(){
   const pxPerIn = (size/2-16)/ringsTo;
 
   let svg = `<svg viewBox="0 0 ${size} ${size}" width="100%" style="max-width:320px;display:block;margin:0 auto;">`;
+  svg += `<rect x="0" y="0" width="${size}" height="${size}" fill="#3D4430"/>`;
   for(let r=ringStep;r<=ringsTo;r+=ringStep){
-    svg += `<circle cx="${cx}" cy="${cy}" r="${r*pxPerIn}" fill="none" stroke="#333B2A" stroke-width="1"/>`;
-    svg += `<text x="${cx+3}" y="${cy-r*pxPerIn-3}" font-family="IBM Plex Mono" font-size="8" fill="#8B9184">${r}"</text>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="${r*pxPerIn}" fill="none" stroke="#FF6600" stroke-width="1.75"/>`;
+    svg += `<text x="${cx+3}" y="${cy-r*pxPerIn-3}" font-family="IBM Plex Mono" font-size="10" font-weight="700" fill="#FF6600">${r}"</text>`;
   }
-  svg += `<line x1="${cx-8}" y1="${cy}" x2="${cx+8}" y2="${cy}" stroke="#E8A33D" stroke-width="1"/>
-          <line x1="${cx}" y1="${cy-8}" x2="${cx}" y2="${cy+8}" stroke="#E8A33D" stroke-width="1"/>`;
+  svg += `<line x1="${cx-8}" y1="${cy}" x2="${cx+8}" y2="${cy}" stroke="#FF6600" stroke-width="1.75"/>
+          <line x1="${cx}" y1="${cy-8}" x2="${cx}" y2="${cy+8}" stroke="#FF6600" stroke-width="1.75"/>`;
   visible.forEach(p=>{
     const color = p.distance==null ? '#8B9184' : colorForDistance(p.distance, minD, maxD);
-    svg += shapeMarkerSvg(shapeForArrow(p.arrowSetupId), cx+p.dxIn*pxPerIn, cy+p.dyIn*pxPerIn, 4.5, color);
+    svg += circleWithSymbolSvg(cx+p.dxIn*pxPerIn, cy+p.dyIn*pxPerIn, 4.5, color, symbolForArrow(p.arrowSetupId));
   });
   if(showAvgCenter && visible.length){
     const avgDx = visible.reduce((a,p)=>a+p.dxIn,0)/visible.length;
@@ -1360,9 +1363,9 @@ function renderAllImpacts(){
   const arrowChips = presentArrowIds.map(aid=>{
     const arrow = aid ? getArrowSetup(aid) : null;
     const label = arrow ? (arrow.name + (arrow.weight?' · '+arrow.weight+'gr':'')) : 'No arrow setup';
-    const shape = shapeForArrow(aid);
+    const symbol = symbolForArrow(aid);
     const on = allImpactsArrowSet.has(aid);
-    return `<button class="chip ${on?'active':''}" data-arrow="${aid===null?'__none__':aid}">${shapeIconSvg(shape, on?'#E8A33D':'#8B9184')}${escapeHtml(label)}</button>`;
+    return `<button class="chip ${on?'active':''}" data-arrow="${aid===null?'__none__':aid}">${symbolIconSvg(symbol, on?'#E8A33D':'#8B9184')}${escapeHtml(label)}</button>`;
   }).join('');
 
   const overallM = (()=>{
@@ -1381,7 +1384,7 @@ function renderAllImpacts(){
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Time range</span>
       <div class="chip-row" id="dateRangeChips">
-        ${[['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
+        ${[['24h','24 hours'],['7d','7 days'],['30d','30 days'],['3m','3 months'],['6m','6 months'],['1y','1 year'],['all','All']].map(([k,label])=>
           `<button class="chip ${allImpactsDateRange===k?'active':''}" data-range="${k}">${label}</button>`
         ).join('')}
       </div>
