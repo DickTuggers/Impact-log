@@ -331,6 +331,16 @@ function challengeTotals(challenge){
 function allChallengesFlat(){
   return [...data.challenges].sort((a,b)=> new Date(a.date)-new Date(b.date));
 }
+function oneArrowCooldownStatus(){
+  const last = data.challenges.filter(c=>c.oneArrowMode).sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
+  if(!last) return {ok:true};
+  const elapsedMs = Date.now() - new Date(last.date).getTime();
+  const remainingMs = 24*60*60*1000 - elapsedMs;
+  if(remainingMs<=0) return {ok:true};
+  const hrs = Math.floor(remainingMs/3600000);
+  const mins = Math.round((remainingMs%3600000)/60000);
+  return {ok:false, message: `You can attempt this again in ${hrs}h ${mins}m.`};
+}
 function allGroupingsFlat(){
   const out = [];
   data.sessions.forEach(s=> (s.groupings||[]).forEach(g=> out.push({session:s, grouping:g})));
@@ -594,16 +604,43 @@ function renderHome(){
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Challenges</span>
       <div>
-        ${data.challenges.length===0 ? '<div class="empty">No challenges completed yet.</div>' :
-          [...data.challenges].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
+        ${(()=>{ const multi = data.challenges.filter(c=>!c.oneArrowMode);
+          return multi.length===0 ? '<div class="empty">No challenges completed yet.</div>' :
+          [...multi].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
             const t = challengeTotals(c);
             const aps = c.arrowsPerSet || 3;
+            const formatLabel = aps===1?'5 arrows':'5 sets of 3';
             return `<div class="row-item" data-challenge-id="${c.id}">
               <div><div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
-              <div class="t2">6-ring challenge · ${aps===1?'5 arrows':'5 sets of 3'}</div></div>
+              <div class="t2">6-ring challenge · ${formatLabel}</div></div>
               <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
             </div>`;
-          }).join('')}
+          }).join('');
+        })()}
+      </div>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">One Arrow Challenge</span>
+      ${(()=>{
+        const status = oneArrowCooldownStatus();
+        return status.ok
+          ? `<button class="btn" id="oneArrowBtn" style="margin-bottom:12px;">Take Attempt</button>`
+          : `<p class="instr" style="color:var(--muted);">On cooldown — ${status.message}</p>`;
+      })()}
+      <div>
+        ${(()=>{ const oneArrow = data.challenges.filter(c=>c.oneArrowMode);
+          if(oneArrow.length===0) return '<div class="empty">No attempts yet.</div>';
+          return [...oneArrow].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
+            const t = challengeTotals(c);
+            const dist = c.sets[0]?.distance;
+            return `<div class="row-item" data-challenge-id="${c.id}">
+              <div><div class="t1">${fmtDate(c.date)}</div>
+              <div class="t2">${dist?dist+'yd':''}</div></div>
+              <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
+            </div>`;
+          }).join('');
+        })()}
       </div>
     </div>
 
@@ -662,6 +699,8 @@ function renderHome(){
   document.getElementById('equipTrendsBtn').onclick = ()=>{ view={screen:'equipmentTrends'}; render(); };
   document.getElementById('equipChangesBtn').onclick = ()=>{ view={screen:'equipmentChanges'}; render(); };
   document.getElementById('newChallengeBtn').onclick = startNewChallenge;
+  const oneArrowBtn = document.getElementById('oneArrowBtn');
+  if(oneArrowBtn) oneArrowBtn.onclick = startOneArrowChallenge;
   document.querySelectorAll('[data-challenge-id]').forEach(el=>{
     el.onclick = ()=>{ view={screen:'challengeDetail', id:el.dataset.challengeId}; render(); };
   });
@@ -757,7 +796,21 @@ function startNewSession(){
 function startNewChallenge(){
   flow = {
     mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
-    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:3,
+    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:3, totalSets:5, oneArrowMode:false,
+    sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
+    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null
+  };
+  const eq = getPreviousEquipment();
+  flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
+  view = {screen:'newSession'};
+  render();
+}
+async function startOneArrowChallenge(){
+  const status = oneArrowCooldownStatus();
+  if(!status.ok){ await showAlert(`This challenge can only be attempted once every 24 hours. ${status.message}`); return; }
+  flow = {
+    mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
+    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:1, totalSets:1, oneArrowMode:true,
     sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
     challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null
   };
@@ -803,7 +856,7 @@ function renderFlow(){
     chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
     calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
     nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup',
-    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of 5`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format'
+    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of ${flow.totalSets||5}`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format', oneArrowSafeMax:'Set safe max yardage'
   };
   $app.innerHTML = `
     <div class="flow-hdr"><div class="step-label">${stepNames[flow.step]}</div>
@@ -812,7 +865,7 @@ function renderFlow(){
   `;
   document.getElementById('closeFlow').onclick = async ()=>{
     if(flow.step==='savedPrompt' || flow.step==='challengeSummary'){ cancelFlow(); return; }
-    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat'];
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat','oneArrowSafeMax'];
     const isTrivial = trivialSteps.includes(flow.step);
     if(!isTrivial && !(await showConfirm('Discard unsaved changes?', {confirmLabel:'Discard'}))) return;
     if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
@@ -829,6 +882,7 @@ function renderFlow(){
   else if(flow.step==='nameArrow') renderNameArrowStep(body);
   else if(flow.step==='editArrow') renderEditArrowStep(body);
   else if(flow.step==='challengeFormat') renderChallengeFormatStep(body);
+  else if(flow.step==='oneArrowSafeMax') renderOneArrowSafeMaxStep(body);
   else if(flow.step==='challengeType') renderChallengeTypeStep(body);
   else if(flow.step==='ringWidth') renderRingWidthStep(body);
   else if(flow.step==='captureSet') renderCaptureSetStep(body);
@@ -867,7 +921,11 @@ function renderChooseEquipmentStep(body){
   if(noteEl) noteEl.oninput = e=>{ flow.equipChangeNote = e.target.value; };
   document.getElementById('continueBtn').onclick = async ()=>{
     if(flow.equipChanged && !(flow.equipChangeNote||'').trim()){ await showAlert('Add a quick note on what changed, or uncheck the box.'); return; }
-    flow.step = flow.mode==='newChallenge' ? 'challengeFormat' : 'capture';
+    if(flow.mode==='newChallenge'){
+      flow.step = flow.oneArrowMode ? 'oneArrowSafeMax' : 'challengeFormat';
+    } else {
+      flow.step = 'capture';
+    }
     render();
   };
 }
@@ -1198,16 +1256,21 @@ function randomMultipleInRange(min, max, step){
   if(options.length===0) return min;
   return options[Math.floor(Math.random()*options.length)];
 }
+function randomIntInRange(min, max){
+  if(max<min) return min;
+  return Math.floor(Math.random()*(max-min+1))+min;
+}
 function renderChallengeFormatStep(body){
   const formats = [
-    {key:3, label:'5 Sets of 3 (15 arrows)', desc:'Classic format — 5 sets, 3 arrows each, scored per arrow.'},
-    {key:1, label:'5 Arrows', desc:'Just 5 single arrows total, scored per arrow.'}
+    {key:'3', label:'5 Sets of 3 (15 arrows)', desc:'Classic format — 5 sets, 3 arrows each, scored per arrow.'},
+    {key:'1', label:'5 Arrows', desc:'Just 5 single arrows total, scored per arrow.'}
   ];
+  const selectedKey = String(flow.arrowsPerSet);
   body.innerHTML = `
     <p class="instr">Choose the challenge format.</p>
     <div class="chip-row" id="formatChips" style="flex-direction:column;align-items:stretch;">
       ${formats.map(f=>`
-        <button class="chip ${flow.arrowsPerSet===f.key?'active':''}" data-format="${f.key}" style="text-align:left;margin-bottom:6px;">
+        <button class="chip ${selectedKey===f.key?'active':''}" data-format="${f.key}" style="text-align:left;margin-bottom:6px;">
           <b>${f.label}</b><br><span style="font-size:10px;color:var(--muted);">${f.desc}</span>
         </button>
       `).join('')}
@@ -1215,9 +1278,31 @@ function renderChallengeFormatStep(body){
     <button class="btn" id="formatContinueBtn" style="margin-top:14px;">Continue</button>
   `;
   document.querySelectorAll('#formatChips .chip').forEach(c=>{
-    c.onclick = ()=>{ flow.arrowsPerSet = parseInt(c.dataset.format); renderChallengeFormatStep(body); };
+    c.onclick = ()=>{
+      flow.arrowsPerSet = parseInt(c.dataset.format);
+      flow.totalSets = 5;
+      renderChallengeFormatStep(body);
+    };
   });
-  document.getElementById('formatContinueBtn').onclick = ()=>{ flow.step='challengeType'; render(); };
+  document.getElementById('formatContinueBtn').onclick = ()=>{ flow.step = 'challengeType'; render(); };
+}
+function renderOneArrowSafeMaxStep(body){
+  body.innerHTML = `
+    <p class="instr">This challenge fires one arrow at a random distance between <b>15 yards</b> and the safe max you set below.</p>
+    <label class="f-label">Safe max yardage</label>
+    <input type="number" id="oneArrowMaxInput" step="1" placeholder="e.g. 60" value="${flow.safeMaxYardage||''}">
+    <button class="btn" id="oneArrowContinueBtn" style="margin-top:14px;">Continue</button>
+  `;
+  document.getElementById('oneArrowMaxInput').oninput = e=>{ flow.safeMaxYardage = e.target.value; };
+  document.getElementById('oneArrowContinueBtn').onclick = async ()=>{
+    const safeMax = parseFloat(flow.safeMaxYardage);
+    if(!safeMax || safeMax<15){ await showAlert('Enter a safe max yardage of at least 15.'); return; }
+    const d = randomIntInRange(15, safeMax);
+    flow.setDistances = [d];
+    await showAlert(`Distance for this attempt: ${d} yards.`);
+    flow.step = 'ringWidth';
+    render();
+  };
 }
 function renderChallengeTypeStep(body){
   const unit = flow.arrowsPerSet===1 ? 'arrow' : 'set';
@@ -1305,14 +1390,15 @@ function renderCaptureSetStep(body){
   const hasSel = flow.selectedImpactIndex!==null && flow.impacts[flow.selectedImpactIndex];
   const currentDistance = flow.setDistances ? flow.setDistances[flow.currentSet-1] : null;
   const n = flow.arrowsPerSet;
+  const total = flow.totalSets || 5;
   const maxPerSet = n*11;
   const unitLabel = n===1 ? 'Arrow' : 'Set';
   const completedSets = flow.sets.map(set=>{
-    const total = set.arrows.reduce((a,ar)=>a+ar.score,0);
-    return `<div class="legend-item">${unitLabel} ${set.setNumber} (${set.distance}yd): ${total}/${maxPerSet}</div>`;
+    const setTotal = set.arrows.reduce((a,ar)=>a+ar.score,0);
+    return `<div class="legend-item">${unitLabel} ${set.setNumber} (${set.distance}yd): ${setTotal}/${maxPerSet}</div>`;
   }).join('');
   body.innerHTML = `
-    <p class="instr">Tap ${n===1?'the arrow':'each arrow'} for <b>${unitLabel} ${flow.currentSet} of 5${currentDistance?' — '+currentDistance+' yards':''}</b>${n>1?` (${n} arrows)`:''}.</p>
+    <p class="instr">Tap ${n===1?'the arrow':'each arrow'} for <b>${unitLabel} ${flow.currentSet} of ${total}${currentDistance?' — '+currentDistance+' yards':''}</b>${n>1?` (${n} arrows)`:''}.</p>
     ${completedSets ? `<div class="legend" style="margin-bottom:12px;">${completedSets}</div>` : ''}
     <div class="shot-counter">${flow.impacts.length} / ${n} arrow${n!==1?'s':''} in this ${n===1?'arrow':'set'}</div>
     <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
@@ -1360,7 +1446,7 @@ function renderCaptureSetStep(body){
   document.getElementById('confirmSetBtn').onclick = async ()=>{
     const arrows = flow.impacts.map(p=>({ ...p, score: scoreForDistance(p.distIn, flow.ringWidth) }));
     flow.sets.push({ setNumber: flow.currentSet, distance: currentDistance, arrows });
-    if(flow.currentSet<5){
+    if(flow.currentSet<total){
       flow.currentSet += 1;
       flow.impacts = [];
       flow.selectedImpactIndex = null;
@@ -1368,6 +1454,7 @@ function renderCaptureSetStep(body){
     } else {
       const challenge = {
         id: uid(), date: new Date().toISOString(), label: flow.label||'',
+        oneArrowMode: !!flow.oneArrowMode,
         targetId: flow.targetId, bowId: flow.bowId||null, arrowSetupId: flow.arrowSetupId||null,
         ringWidth: flow.ringWidth, challengeType: flow.challengeType, arrowsPerSet: flow.arrowsPerSet, sets: flow.sets
       };
@@ -1771,12 +1858,13 @@ function renderChallengeDetail(){
     </div>
     <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
     <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">By set</span>
+      <span class="label">${challenge.oneArrowMode ? 'Result' : 'By set'}</span>
       ${challenge.sets.map((set,idx)=>{
         const setTotal = set.arrows.reduce((a,ar)=>a+ar.score,0);
         const setMax = set.arrows.length*11;
+        const unitLabel = challenge.oneArrowMode ? 'Arrow' : 'Set';
         return `<div class="row-item" style="cursor:default;">
-          <div><span class="swatch" style="background:${PALETTE[idx%PALETTE.length]};display:inline-block;margin-right:6px;"></span><span class="t1">Set ${set.setNumber}${set.distance?' · '+set.distance+'yd':''}</span>
+          <div><span class="swatch" style="background:${PALETTE[idx%PALETTE.length]};display:inline-block;margin-right:6px;"></span><span class="t1">${unitLabel}${challenge.oneArrowMode?'':' '+set.setNumber}${set.distance?' · '+set.distance+'yd':''}</span>
           <div class="t2">${set.arrows.map(a=>a.score).join(' + ')}</div></div>
           <div class="metric">${setTotal}<span class="u">/${setMax}</span></div>
         </div>`;
