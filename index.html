@@ -18,7 +18,7 @@
 <style>
   :root{
     --bg:#12140F; --panel:#191D14; --panel-2:#1F2418; --border:#333B2A;
-    --text:#EDEAE1; --muted:#8B9184; --amber:#E8A33D; --amber-dim:#8C6A2D;
+    --text:#EDEAE1; --muted:#8B9184; --amber:#FF6600; --amber-dim:#B34700;
     --olive:#7FA65C; --rust:#C1502E;
     --sans:'Inter',system-ui,-apple-system,sans-serif;
     --display:'Barlow Condensed',var(--sans);
@@ -47,7 +47,7 @@
 
   .btn{font-family:var(--sans);font-weight:600;font-size:14.5px;background:var(--amber);color:#161810;border:none;padding:12px 18px;cursor:pointer;width:100%;transition:filter .15s ease;}
   .btn:active{filter:brightness(0.9);}
-  .btn.secondary{background:transparent;color:var(--text);border:1px solid var(--border);}
+  .btn.secondary{background:transparent;color:var(--amber);border:1px solid var(--amber-dim);}
   .btn.ghost{background:transparent;color:var(--muted);border:none;text-decoration:underline;width:auto;padding:6px 0;font-size:13px;}
   .btn.small{width:auto;padding:8px 14px;font-size:13px;}
   .btn.danger{background:transparent;color:var(--rust);border:1px solid var(--rust);}
@@ -129,7 +129,7 @@ const PALETTE = ['#E8A33D','#7FA65C','#5B8FA6','#C1502E','#A67FA6','#D9C25B','#5
 const DISPLAY_W = 560;
 const NUDGE = 2; // image-pixel nudge step for fine adjustment
 
-let data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [] };
+let data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [], challenges: [] };
 let view = { screen:'home' };
 let flow = null;
 let allImpactsFilter = null;
@@ -224,12 +224,13 @@ async function loadData(){
     await saveData();
     return;
   }
-  data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [] };
+  data = { targetLibrary: [], sessions: [], bows: [], arrowSetups: [], equipmentChanges: [], challenges: [] };
 }
 function normalizeData(d){
   if(!d.bows) d.bows = [];
   if(!d.arrowSetups) d.arrowSetups = [];
   if(!d.equipmentChanges) d.equipmentChanges = [];
+  if(!d.challenges) d.challenges = [];
   (d.sessions||[]).forEach(s=>{
     if(s.bowId===undefined) s.bowId = (s.groupings&&s.groupings[0]&&s.groupings[0].bowId) || null;
     if(s.arrowSetupId===undefined) s.arrowSetupId = (s.groupings&&s.groupings[0]&&s.groupings[0].arrowSetupId) || null;
@@ -243,7 +244,7 @@ function migrateLegacy(oldSessions){
     targetLibrary.push({ id:assetId, name:s.label||('Target — '+fmtDate(s.date)), dataUrl:s.targetImage, imgW:s.imgW, imgH:s.imgH, pixelsPerInch:s.pixelsPerInch, centerPx:s.centerPx, createdAt:s.date });
     return { id:s.id, date:s.date, label:s.label||'', targetId:assetId, groupings:[{ id:uid(), distance:null, bowId:null, arrowSetupId:null, impacts:s.impacts||[], createdAt:s.date }] };
   });
-  return { targetLibrary, sessions, bows: [], arrowSetups: [], equipmentChanges: [] };
+  return { targetLibrary, sessions, bows: [], arrowSetups: [], equipmentChanges: [], challenges: [] };
 }
 async function saveData(){
   const json = JSON.stringify(data);
@@ -275,12 +276,14 @@ async function handleImportFile(e){
     const newBows = (parsed.bows||[]).filter(b=> !data.bows.some(x=>x.id===b.id));
     const newArrows = (parsed.arrowSetups||[]).filter(a=> !data.arrowSetups.some(x=>x.id===a.id));
     const newChanges = (parsed.equipmentChanges||[]).filter(c=> !data.equipmentChanges.some(x=>x.id===c.id));
-    if(!(await showConfirm(`Add ${newSessions.length} session(s), ${newAssets.length} target(s), ${newBows.length} bow(s), and ${newArrows.length} arrow setup(s) from this file to your current data? Nothing existing will be removed.`, {confirmLabel:'Import'}))) { e.target.value=''; return; }
+    const newChallenges = (parsed.challenges||[]).filter(c=> !data.challenges.some(x=>x.id===c.id));
+    if(!(await showConfirm(`Add ${newSessions.length} session(s), ${newAssets.length} target(s), ${newBows.length} bow(s), ${newArrows.length} arrow setup(s), and ${newChallenges.length} challenge(s) from this file to your current data? Nothing existing will be removed.`, {confirmLabel:'Import'}))) { e.target.value=''; return; }
     data.sessions = data.sessions.concat(newSessions);
     data.targetLibrary = data.targetLibrary.concat(newAssets);
     data.bows = data.bows.concat(newBows);
     data.arrowSetups = data.arrowSetups.concat(newArrows);
     data.equipmentChanges = data.equipmentChanges.concat(newChanges);
+    data.challenges = data.challenges.concat(newChallenges);
     await saveData();
     view = {screen:'home'};
     render();
@@ -310,6 +313,23 @@ function groupingMetrics(g){
     if(d>extremeSpread) extremeSpread = d;
   }
   return {count:impacts.length, meanRadius, extremeSpread};
+}
+// 6-ring (WA/FITA style) scoring, plus an inner X ring worth 11 within 0.5" of center.
+const X_RADIUS_IN = 0.5;
+function scoreForDistance(distIn, ringWidth){
+  if(distIn <= X_RADIUS_IN) return 11;
+  const band = Math.floor(distIn / ringWidth);
+  if(band>=6) return 0;
+  return 10 - band;
+}
+function getChallenge(id){ return data.challenges.find(c=>c.id===id); }
+function challengeTotals(challenge){
+  let total=0, count=0;
+  (challenge.sets||[]).forEach(set=> (set.arrows||[]).forEach(a=>{ total+=a.score; count++; }));
+  return { total, max: count*11, count };
+}
+function allChallengesFlat(){
+  return [...data.challenges].sort((a,b)=> new Date(a.date)-new Date(b.date));
 }
 function allGroupingsFlat(){
   const out = [];
@@ -432,6 +452,7 @@ function render(){
   else if(view.screen==='allImpacts') renderAllImpacts();
   else if(view.screen==='equipmentTrends') renderEquipmentTrends();
   else if(view.screen==='equipmentChanges') renderEquipmentChanges();
+  else if(view.screen==='challengeDetail') renderChallengeDetail();
 }
 
 function renderAvgImpactSvg(flatImpacts){
@@ -550,6 +571,9 @@ function renderHome(){
       <button class="btn secondary" id="equipTrendsBtn">Equipment Trends</button>
       <button class="btn secondary" id="equipChangesBtn">Equipment Changes</button>
     </div>
+    <div class="nav-row">
+      <button class="btn secondary" id="newChallengeBtn">+ New Challenge</button>
+    </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Sessions</span>
@@ -562,6 +586,22 @@ function renderHome(){
               <div><div class="t1">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
               <div class="t2">${gCount} grouping${gCount!==1?'s':''} · ${shotCount} shot${shotCount!==1?'s':''}</div></div>
               <div class="metric">›</div>
+            </div>`;
+          }).join('')}
+      </div>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Challenges</span>
+      <div>
+        ${data.challenges.length===0 ? '<div class="empty">No challenges completed yet.</div>' :
+          [...data.challenges].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
+            const t = challengeTotals(c);
+            const aps = c.arrowsPerSet || 3;
+            return `<div class="row-item" data-challenge-id="${c.id}">
+              <div><div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
+              <div class="t2">6-ring challenge · ${aps===1?'5 arrows':'5 sets of 3'}</div></div>
+              <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
             </div>`;
           }).join('')}
       </div>
@@ -621,6 +661,10 @@ function renderHome(){
   document.getElementById('allImpactsBtn').onclick = ()=>{ view={screen:'allImpacts'}; render(); };
   document.getElementById('equipTrendsBtn').onclick = ()=>{ view={screen:'equipmentTrends'}; render(); };
   document.getElementById('equipChangesBtn').onclick = ()=>{ view={screen:'equipmentChanges'}; render(); };
+  document.getElementById('newChallengeBtn').onclick = startNewChallenge;
+  document.querySelectorAll('[data-challenge-id]').forEach(el=>{
+    el.onclick = ()=>{ view={screen:'challengeDetail', id:el.dataset.challengeId}; render(); };
+  });
   document.getElementById('addBowBtn').onclick = ()=> startAddBow(null);
   document.querySelectorAll('[data-add-arrow]').forEach(btn=>{
     btn.onclick = ()=> startAddArrow(btn.dataset.addArrow, null);
@@ -710,6 +754,18 @@ function startNewSession(){
   view = {screen:'newSession'};
   render();
 }
+function startNewChallenge(){
+  flow = {
+    mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
+    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:3,
+    sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
+    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null
+  };
+  const eq = getPreviousEquipment();
+  flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
+  view = {screen:'newSession'};
+  render();
+}
 function startAddTarget(){
   flow = { mode:'addTarget', step:'chooseTarget', assetDraft:null, targetId:null, sessionId:null, impacts:[] };
   view = {screen:'newSession'};
@@ -746,7 +802,8 @@ function renderFlow(){
   const stepNames = {
     chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
     calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
-    nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup'
+    nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup',
+    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of 5`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format'
   };
   $app.innerHTML = `
     <div class="flow-hdr"><div class="step-label">${stepNames[flow.step]}</div>
@@ -754,8 +811,8 @@ function renderFlow(){
     <div id="flowBody"></div>
   `;
   document.getElementById('closeFlow').onclick = async ()=>{
-    if(flow.step==='savedPrompt'){ cancelFlow(); return; }
-    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow'];
+    if(flow.step==='savedPrompt' || flow.step==='challengeSummary'){ cancelFlow(); return; }
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat'];
     const isTrivial = trivialSteps.includes(flow.step);
     if(!isTrivial && !(await showConfirm('Discard unsaved changes?', {confirmLabel:'Discard'}))) return;
     if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
@@ -771,6 +828,11 @@ function renderFlow(){
   else if(flow.step==='nameBow') renderNameBowStep(body);
   else if(flow.step==='nameArrow') renderNameArrowStep(body);
   else if(flow.step==='editArrow') renderEditArrowStep(body);
+  else if(flow.step==='challengeFormat') renderChallengeFormatStep(body);
+  else if(flow.step==='challengeType') renderChallengeTypeStep(body);
+  else if(flow.step==='ringWidth') renderRingWidthStep(body);
+  else if(flow.step==='captureSet') renderCaptureSetStep(body);
+  else if(flow.step==='challengeSummary') renderChallengeSummaryStep(body);
 }
 function renderChooseEquipmentStep(body){
   body.innerHTML = `
@@ -805,7 +867,8 @@ function renderChooseEquipmentStep(body){
   if(noteEl) noteEl.oninput = e=>{ flow.equipChangeNote = e.target.value; };
   document.getElementById('continueBtn').onclick = async ()=>{
     if(flow.equipChanged && !(flow.equipChangeNote||'').trim()){ await showAlert('Add a quick note on what changed, or uncheck the box.'); return; }
-    flow.step='capture'; render();
+    flow.step = flow.mode==='newChallenge' ? 'challengeFormat' : 'capture';
+    render();
   };
 }
 function renderNameBowStep(body){
@@ -1129,6 +1192,229 @@ function renderCaptureStep(body){
     render();
   };
 }
+function randomMultipleInRange(min, max, step){
+  const options = [];
+  for(let v=min; v<=max; v+=step) options.push(v);
+  if(options.length===0) return min;
+  return options[Math.floor(Math.random()*options.length)];
+}
+function renderChallengeFormatStep(body){
+  const formats = [
+    {key:3, label:'5 Sets of 3 (15 arrows)', desc:'Classic format — 5 sets, 3 arrows each, scored per arrow.'},
+    {key:1, label:'5 Arrows', desc:'Just 5 single arrows total, scored per arrow.'}
+  ];
+  body.innerHTML = `
+    <p class="instr">Choose the challenge format.</p>
+    <div class="chip-row" id="formatChips" style="flex-direction:column;align-items:stretch;">
+      ${formats.map(f=>`
+        <button class="chip ${flow.arrowsPerSet===f.key?'active':''}" data-format="${f.key}" style="text-align:left;margin-bottom:6px;">
+          <b>${f.label}</b><br><span style="font-size:10px;color:var(--muted);">${f.desc}</span>
+        </button>
+      `).join('')}
+    </div>
+    <button class="btn" id="formatContinueBtn" style="margin-top:14px;">Continue</button>
+  `;
+  document.querySelectorAll('#formatChips .chip').forEach(c=>{
+    c.onclick = ()=>{ flow.arrowsPerSet = parseInt(c.dataset.format); renderChallengeFormatStep(body); };
+  });
+  document.getElementById('formatContinueBtn').onclick = ()=>{ flow.step='challengeType'; render(); };
+}
+function renderChallengeTypeStep(body){
+  const unit = flow.arrowsPerSet===1 ? 'arrow' : 'set';
+  const unitPlural = flow.arrowsPerSet===1 ? 'arrows' : 'sets';
+  const types = [
+    {key:'fixed', label:'One distance I choose', desc:`All 5 ${unitPlural} shot at a single distance you pick.`},
+    {key:'randomFixed', label:'One random distance', desc:`The app picks one random distance; all 5 ${unitPlural} use it.`},
+    {key:'increasing', label:'Increasing by 10yd', desc:`5 ${unitPlural} at increasing distances, +10 yards each ${unit}.`},
+    {key:'random', label:`Random each ${unit}`, desc:`Each of the 5 ${unitPlural} gets its own random distance.`}
+  ];
+  const needsSafeMax = flow.challengeType==='increasing' || flow.challengeType==='random';
+  body.innerHTML = `
+    <p class="instr">Choose how distance works for this challenge.</p>
+    <div class="chip-row" id="typeChips" style="flex-direction:column;align-items:stretch;">
+      ${types.map(t=>`
+        <button class="chip ${flow.challengeType===t.key?'active':''}" data-type="${t.key}" style="text-align:left;margin-bottom:6px;">
+          <b>${t.label}</b><br><span style="font-size:10px;color:var(--muted);">${t.desc}</span>
+        </button>
+      `).join('')}
+    </div>
+    ${flow.challengeType==='fixed' ? `
+      <label class="f-label" style="margin-top:14px;">Distance for all 5 ${unitPlural}</label>
+      <select id="fixedDistInput">${distanceOptions(flow.fixedDistance)}</select>
+      ${flow.fixedDistance==='custom' ? `<input type="number" id="fixedCustomInput" step="0.5" placeholder="Enter exact yards" value="${flow.fixedCustomDistance||''}">` : ''}
+    ` : ''}
+    ${needsSafeMax ? `
+      <label class="f-label" style="margin-top:14px;">Safe max yardage</label>
+      <input type="number" id="safeMaxInput" step="5" placeholder="e.g. 60" value="${flow.safeMaxYardage||''}">
+      <p class="instr" style="color:var(--muted);">${flow.challengeType==='increasing' ? 'Distances will increase by 10 yards per set, staying at or under this max.' : 'Each set gets its own random distance, capped at this max.'}</p>
+    ` : ''}
+    <button class="btn" id="typeContinueBtn" style="margin-top:14px;">Continue</button>
+  `;
+  document.querySelectorAll('#typeChips .chip').forEach(c=>{
+    c.onclick = ()=>{ flow.challengeType = c.dataset.type; renderChallengeTypeStep(body); };
+  });
+  const fixedSel = document.getElementById('fixedDistInput');
+  if(fixedSel) fixedSel.onchange = e=>{ flow.fixedDistance = e.target.value; renderChallengeTypeStep(body); };
+  const fixedCustom = document.getElementById('fixedCustomInput');
+  if(fixedCustom) fixedCustom.oninput = e=>{ flow.fixedCustomDistance = e.target.value; };
+  const safeMaxEl = document.getElementById('safeMaxInput');
+  if(safeMaxEl) safeMaxEl.oninput = e=>{ flow.safeMaxYardage = e.target.value; };
+
+  document.getElementById('typeContinueBtn').onclick = async ()=>{
+    if(flow.challengeType==='fixed'){
+      const d = flow.fixedDistance==='custom' ? parseFloat(flow.fixedCustomDistance) : parseFloat(flow.fixedDistance);
+      if(!d || d<=0){ await showAlert('Select or enter a distance for this challenge.'); return; }
+      flow.setDistances = Array(5).fill(d);
+    } else if(flow.challengeType==='randomFixed'){
+      const d = randomMultipleInRange(5,100,5);
+      flow.setDistances = Array(5).fill(d);
+      await showAlert(`Random distance chosen: ${d} yards for all 5 sets.`);
+    } else if(flow.challengeType==='increasing'){
+      const safeMax = parseFloat(flow.safeMaxYardage);
+      if(!safeMax || safeMax<45){ await showAlert('Enter a safe max yardage of at least 45 (since sets increase by 10 yards, five times, starting from at least 5).'); return; }
+      const start = randomMultipleInRange(5, safeMax-40, 5);
+      flow.setDistances = [0,1,2,3,4].map(i=> start + i*10);
+      await showAlert(`Distances for this challenge: ${flow.setDistances.join(', ')} yards.`);
+    } else if(flow.challengeType==='random'){
+      const safeMax = parseFloat(flow.safeMaxYardage);
+      if(!safeMax || safeMax<10){ await showAlert('Enter a safe max yardage of at least 10.'); return; }
+      flow.setDistances = [0,1,2,3,4].map(()=> randomMultipleInRange(10, safeMax, 5));
+      await showAlert(`Distances for this challenge: ${flow.setDistances.join(', ')} yards.`);
+    }
+    flow.step = 'ringWidth';
+    render();
+  };
+}
+function renderRingWidthStep(body){
+  body.innerHTML = `
+    <p class="instr">This challenge scores like a 6-ring target: <b>10, 9, 8, 7, 6, 5</b> points across six equal-width bands measured from center, plus an inner <b>X ring worth 11</b> within ${X_RADIUS_IN}" of dead center, then a miss (0) beyond the sixth band.</p>
+    <label class="f-label">Ring width (inches per band)</label>
+    <input type="number" id="ringWidthInput" step="0.1" value="${flow.ringWidth}">
+    <p class="instr" style="color:var(--muted);">Example: a 2" ring width means 0-${X_RADIUS_IN}" scores 11 (X), ${X_RADIUS_IN}"-2" scores 10, 2"-4" scores 9, and so on down to 5, with anything past 12" scoring 0.</p>
+    <button class="btn" id="startChallengeBtn">Start Challenge — Set 1 of 5</button>
+  `;
+  document.getElementById('ringWidthInput').oninput = e=>{ flow.ringWidth = parseFloat(e.target.value)||2; };
+  document.getElementById('startChallengeBtn').onclick = ()=>{
+    if(!flow.ringWidth || flow.ringWidth<=0){ flow.ringWidth = 2; }
+    flow.step = 'captureSet';
+    render();
+  };
+}
+function renderCaptureSetStep(body){
+  const asset = getAsset(flow.targetId);
+  const hasSel = flow.selectedImpactIndex!==null && flow.impacts[flow.selectedImpactIndex];
+  const currentDistance = flow.setDistances ? flow.setDistances[flow.currentSet-1] : null;
+  const n = flow.arrowsPerSet;
+  const maxPerSet = n*11;
+  const unitLabel = n===1 ? 'Arrow' : 'Set';
+  const completedSets = flow.sets.map(set=>{
+    const total = set.arrows.reduce((a,ar)=>a+ar.score,0);
+    return `<div class="legend-item">${unitLabel} ${set.setNumber} (${set.distance}yd): ${total}/${maxPerSet}</div>`;
+  }).join('');
+  body.innerHTML = `
+    <p class="instr">Tap ${n===1?'the arrow':'each arrow'} for <b>${unitLabel} ${flow.currentSet} of 5${currentDistance?' — '+currentDistance+' yards':''}</b>${n>1?` (${n} arrows)`:''}.</p>
+    ${completedSets ? `<div class="legend" style="margin-bottom:12px;">${completedSets}</div>` : ''}
+    <div class="shot-counter">${flow.impacts.length} / ${n} arrow${n!==1?'s':''} in this ${n===1?'arrow':'set'}</div>
+    <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
+    ${flow.impacts.length ? `
+      <div class="chip-row" id="impactChips">
+        ${flow.impacts.map((p,i)=>`<button class="chip ${flow.selectedImpactIndex===i?'active':''}" data-idx="${i}">${p.order}: ${scoreForDistance(p.distIn,flow.ringWidth)}pt</button>`).join('')}
+      </div>
+      ${hasSel ? adjusterHtml('Fine-tune arrow '+flow.impacts[flow.selectedImpactIndex].order) : ''}
+    ` : ''}
+    <div class="btn-row">
+      <button class="btn secondary" id="undoBtn" ${flow.impacts.length===0?'disabled':''}>Undo last</button>
+      <button class="btn" id="confirmSetBtn" ${flow.impacts.length!==n?'disabled':''}>Confirm ${unitLabel} ${flow.currentSet}</button>
+    </div>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+  wrap.addEventListener('click', e=>{
+    if(flow.impacts.length>=n) return;
+    const rect = wrap.getBoundingClientRect();
+    const x = (e.clientX-rect.left)/rect.width*asset.imgW, y = (e.clientY-rect.top)/rect.height*asset.imgH;
+    const p = { xPx:x, yPx:y, order:flow.impacts.length+1 };
+    recomputeImpact(p, asset);
+    flow.impacts.push(p);
+    flow.selectedImpactIndex = flow.impacts.length-1;
+    renderCaptureSetStep(body);
+  });
+  if(flow.impacts.length){
+    document.getElementById('impactChips').querySelectorAll('.chip').forEach(c=>{
+      c.onclick = ()=>{ flow.selectedImpactIndex = parseInt(c.dataset.idx); renderCaptureSetStep(body); };
+    });
+    if(hasSel){
+      wireAdjuster(body, (dx,dy)=>{
+        const p = flow.impacts[flow.selectedImpactIndex];
+        p.xPx = clamp(p.xPx+dx, 0, asset.imgW); p.yPx = clamp(p.yPx+dy, 0, asset.imgH);
+        recomputeImpact(p, asset);
+        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+      });
+    }
+  }
+  document.getElementById('undoBtn').onclick = ()=>{
+    flow.impacts.pop();
+    flow.selectedImpactIndex = flow.impacts.length? flow.impacts.length-1 : null;
+    renderCaptureSetStep(body);
+  };
+  document.getElementById('confirmSetBtn').onclick = async ()=>{
+    const arrows = flow.impacts.map(p=>({ ...p, score: scoreForDistance(p.distIn, flow.ringWidth) }));
+    flow.sets.push({ setNumber: flow.currentSet, distance: currentDistance, arrows });
+    if(flow.currentSet<5){
+      flow.currentSet += 1;
+      flow.impacts = [];
+      flow.selectedImpactIndex = null;
+      render();
+    } else {
+      const challenge = {
+        id: uid(), date: new Date().toISOString(), label: flow.label||'',
+        targetId: flow.targetId, bowId: flow.bowId||null, arrowSetupId: flow.arrowSetupId||null,
+        ringWidth: flow.ringWidth, challengeType: flow.challengeType, arrowsPerSet: flow.arrowsPerSet, sets: flow.sets
+      };
+      data.challenges.push(challenge);
+      await saveData();
+      flow.lastChallenge = challenge;
+      flow.step = 'challengeSummary';
+      render();
+    }
+  };
+}
+function renderChallengeSummaryStep(body){
+  const challenge = flow.lastChallenge;
+  const totals = challengeTotals(challenge);
+  const asset = getAsset(challenge.targetId);
+  const {x:cx,y:cy} = asset.centerPx;
+  let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+                 <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
+  challenge.sets.forEach((set,idx)=>{
+    const color = PALETTE[idx%PALETTE.length];
+    set.arrows.forEach(p=>{
+      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
+    });
+  });
+  body.innerHTML = `
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Final score</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">/ ${totals.max} POINTS</div></div>
+      </div>
+    </div>
+    <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">By set</span>
+      ${challenge.sets.map((set,idx)=>{
+        const setTotal = set.arrows.reduce((a,ar)=>a+ar.score,0);
+        const setMax = set.arrows.length*11;
+        return `<div class="row-item" style="cursor:default;">
+          <div><span class="swatch" style="background:${PALETTE[idx%PALETTE.length]};display:inline-block;margin-right:6px;"></span><span class="t1">Set ${set.setNumber}${set.distance?' · '+set.distance+'yd':''}</span></div>
+          <div class="metric">${setTotal}<span class="u">/${setMax}</span></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <button class="btn" id="doneChallengeBtn">Done</button>
+  `;
+  document.getElementById('doneChallengeBtn').onclick = ()=>{ flow=null; view={screen:'home'}; render(); };
+}
 function drawCaptureState(svg, asset, impacts, selectedIdx){
   const {x:cx,y:cy} = asset.centerPx;
   let s = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
@@ -1451,6 +1737,60 @@ function renderAllImpacts(){
       renderAllImpacts();
     };
   });
+}
+
+// ---------- CHALLENGE DETAIL ----------
+function renderChallengeDetail(){
+  const challenge = getChallenge(view.id);
+  if(!challenge){ view={screen:'home'}; render(); return; }
+  const asset = getAsset(challenge.targetId);
+  const totals = challengeTotals(challenge);
+  const bow = challenge.bowId ? getBow(challenge.bowId) : null;
+  const arrow = challenge.arrowSetupId ? getArrowSetup(challenge.arrowSetupId) : null;
+  const equipLabel = [bow?bow.name:null, arrow?arrow.name:null].filter(Boolean).join(' · ');
+  const {x:cx,y:cy} = asset.centerPx;
+  let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+                 <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
+  challenge.sets.forEach((set,idx)=>{
+    const color = PALETTE[idx%PALETTE.length];
+    set.arrows.forEach(p=>{
+      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
+    });
+  });
+  $app.innerHTML = `
+    <div class="flow-hdr">
+      <div class="step-label">${fmtDate(challenge.date)}${challenge.label?' · '+escapeHtml(challenge.label):''}</div>
+      <button class="close" id="closeDetail">‹ Back</button>
+    </div>
+    ${equipLabel ? `<div class="instr" style="margin-bottom:8px;">${escapeHtml(equipLabel)}</div>` : ''}
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <div class="stat-row">
+        <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">/ ${totals.max} POINTS</div></div>
+        <div class="stat"><div class="num">${challenge.ringWidth}"</div><div class="cap">RING WIDTH</div></div>
+      </div>
+    </div>
+    <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">By set</span>
+      ${challenge.sets.map((set,idx)=>{
+        const setTotal = set.arrows.reduce((a,ar)=>a+ar.score,0);
+        const setMax = set.arrows.length*11;
+        return `<div class="row-item" style="cursor:default;">
+          <div><span class="swatch" style="background:${PALETTE[idx%PALETTE.length]};display:inline-block;margin-right:6px;"></span><span class="t1">Set ${set.setNumber}${set.distance?' · '+set.distance+'yd':''}</span>
+          <div class="t2">${set.arrows.map(a=>a.score).join(' + ')}</div></div>
+          <div class="metric">${setTotal}<span class="u">/${setMax}</span></div>
+        </div>`;
+      }).join('')}
+    </div>
+    <button class="btn danger" id="deleteChallengeBtn">Delete challenge</button>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('deleteChallengeBtn').onclick = async ()=>{
+    if(!(await showConfirm('Delete this challenge? This cannot be undone.'))) return;
+    data.challenges = data.challenges.filter(c=>c.id!==challenge.id);
+    await saveData();
+    view={screen:'home'}; render();
+  };
 }
 
 // ---------- EQUIPMENT TRENDS ----------
