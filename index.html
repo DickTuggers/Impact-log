@@ -136,6 +136,7 @@ let allImpactsFilter = null;
 let allImpactsBowSet = null;
 let allImpactsArrowSet = null;
 let allImpactsDateRange = 'all';
+let allImpactsZoom = 1;
 let showAvgCenter = false;
 let charts = {};
 
@@ -365,10 +366,27 @@ function withinDateRange(dateStr, rangeKey){
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
   return new Date(dateStr) >= cutoff;
 }
-function recomputeImpact(p, asset){
-  p.dxIn = (p.xPx-asset.centerPx.x)/asset.pixelsPerInch;
-  p.dyIn = (p.yPx-asset.centerPx.y)/asset.pixelsPerInch;
+function recomputeImpact(p, asset, overrideCenterPx){
+  const center = overrideCenterPx || asset.centerPx;
+  p.dxIn = (p.xPx-center.x)/asset.pixelsPerInch;
+  p.dyIn = (p.yPx-center.y)/asset.pixelsPerInch;
   p.distIn = Math.hypot(p.dxIn,p.dyIn);
+}
+// Impacts are drawn true-to-scale: a real arrow hole is roughly 0.3" across.
+function impactRadiusPx(asset){
+  return Math.max(2, 0.15 * asset.pixelsPerInch);
+}
+function retroactivelyRecenterTarget(assetId, newCenterPx){
+  const asset = getAsset(assetId);
+  if(!asset) return;
+  data.sessions.forEach(s=>{
+    if(s.targetId!==assetId || s.centerOverridePx) return;
+    (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=> recomputeImpact(p, asset, newCenterPx)));
+  });
+  data.challenges.forEach(c=>{
+    if(c.targetId!==assetId || c.centerOverridePx) return;
+    (c.sets||[]).forEach(set=> (set.arrows||[]).forEach(p=> recomputeImpact(p, asset, newCenterPx)));
+  });
 }
 function resizeImageFile(file){
   return new Promise((resolve,reject)=>{
@@ -499,6 +517,21 @@ function sessionsMatchingHomeFilter(){
     return true;
   });
 }
+function challengesMatchingHomeFilter(){
+  return data.challenges.filter(c=>{
+    if(!withinDateRange(c.date, homeDateRange)) return false;
+    if(homeFilterBow!=='all' && c.bowId!==homeFilterBow) return false;
+    if(homeFilterBow!=='all' && homeFilterArrow!=='all' && c.arrowSetupId!==homeFilterArrow) return false;
+    return true;
+  });
+}
+// Percentage vs. possible, with possible capped at 10/arrow — the X ring (11) is a bonus, not counted in the denominator.
+function challengePercentage(challenge){
+  let earned=0, count=0;
+  (challenge.sets||[]).forEach(set=> (set.arrows||[]).forEach(a=>{ earned+=a.score; count++; }));
+  const possible = count*10;
+  return { earned, possible, pct: possible>0 ? (earned/possible)*100 : 0 };
+}
 function renderHome(){
   const matchingSessions = sessionsMatchingHomeFilter();
   const sortedSessions = [...matchingSessions].sort((a,b)=> new Date(b.date)-new Date(a.date));
@@ -523,6 +556,18 @@ function renderHome(){
   const avgDistFromCenter = flatImpacts.length ? flatImpacts.reduce((a,p)=>a+p.distIn,0)/flatImpacts.length : null;
   const avgImpactSvg = renderAvgImpactSvg(flatImpacts);
   const arrowOptions = homeFilterBow!=='all' ? arrowsForBow(homeFilterBow) : [];
+
+  const matchingChallenges = challengesMatchingHomeFilter();
+  const multiChallenges = matchingChallenges.filter(c=>!c.oneArrowMode);
+  const coldShotChallenges = matchingChallenges.filter(c=>c.oneArrowMode);
+  const multiScored = multiChallenges.map(c=>({c, p:challengePercentage(c)})).filter(x=>x.p.possible>0);
+  const avgChallengePct = multiScored.length ? multiScored.reduce((a,x)=>a+x.p.pct,0)/multiScored.length : null;
+  let bestChallenge = null;
+  multiScored.forEach(x=>{ if(!bestChallenge || x.p.pct>bestChallenge.p.pct) bestChallenge = x; });
+  const coldShotScores = coldShotChallenges.map(c=>challengeTotals(c).total);
+  const avgColdShot = coldShotScores.length ? coldShotScores.reduce((a,v)=>a+v,0)/coldShotScores.length : null;
+  let bestColdShot = null, bestColdShotChallenge = null;
+  coldShotChallenges.forEach(c=>{ const t=challengeTotals(c).total; if(bestColdShot===null || t>bestColdShot){ bestColdShot=t; bestColdShotChallenge=c; } });
 
   $app.innerHTML = `
     <div class="hdr"><h1>Impact Log</h1><div class="sub">GROUP TRACKER</div></div>
@@ -569,8 +614,22 @@ function renderHome(){
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Trend — group size over time</span>
-      <div id="trendHolder"><canvas id="trendCanvas" height="140"></canvas></div>
+      <span class="label">Challenge Overview</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num" style="color:var(--amber)">${avgChallengePct!==null?fmt(avgChallengePct,0)+'%':'—'}</div><div class="cap">AVG SCORE (X excluded from possible)</div></div>
+        <div class="stat"><div class="num" style="color:var(--olive)">${bestChallenge?fmt(bestChallenge.p.pct,0)+'%':'—'}</div><div class="cap">HIGH SCORE</div></div>
+      </div>
+      ${bestChallenge ? `<div class="row-item" data-challenge-id="${bestChallenge.c.id}" style="margin-top:6px;">
+        <div class="t2">${fmtDate(bestChallenge.c.date)}${bestChallenge.c.label?' · '+escapeHtml(bestChallenge.c.label):''}</div>
+        <div class="metric">${bestChallenge.p.earned}<span class="u">/${bestChallenge.p.possible}</span></div>
+      </div>` : ''}
+      <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px;">
+        <div class="stat-row">
+          <div class="stat"><div class="num">${avgColdShot!==null?fmt(avgColdShot,1):'—'}</div><div class="cap">AVG COLD SHOT (/11)</div></div>
+          <div class="stat"><div class="num" style="color:var(--olive)">${bestColdShot!==null?bestColdShot:'—'}</div><div class="cap">BEST COLD SHOT</div></div>
+        </div>
+        ${bestColdShotChallenge ? `<div class="t2" style="margin-top:6px;">Best from ${fmtDate(bestColdShotChallenge.date)}</div>` : ''}
+      </div>
     </div>
 
     <div class="nav-row">
@@ -621,7 +680,7 @@ function renderHome(){
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">One Arrow Challenge</span>
+      <span class="label">Cold Shot Challenge</span>
       ${(()=>{
         const status = oneArrowCooldownStatus();
         return status.ok
@@ -669,12 +728,12 @@ function renderHome(){
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Target Library</span>
       <button class="btn secondary" id="addTargetBtn" style="margin-bottom:${data.targetLibrary.length?'10px':'0'};">+ Add Target</button>
-      ${data.targetLibrary.length ? data.targetLibrary.slice().reverse().map(a=>{
-        const usedCount = data.sessions.filter(s=>s.targetId===a.id).length;
+      ${data.targetLibrary.filter(a=>!a.archived).length ? data.targetLibrary.filter(a=>!a.archived).slice().reverse().map(a=>{
+        const usedCount = data.sessions.filter(s=>s.targetId===a.id).length + data.challenges.filter(c=>c.targetId===a.id).length;
         return `<div class="lib-item">
           <img src="${a.dataUrl}">
           <div class="info"><div class="t1">${escapeHtml(a.name)}</div><div class="t2">${fmtDate(a.createdAt)} · used in ${usedCount} session${usedCount!==1?'s':''}</div></div>
-          ${usedCount===0 ? `<button class="btn small danger" data-delete-asset="${a.id}">Delete</button>` : ''}
+          <button class="btn ghost" data-edit-target="${a.id}">Edit</button>
         </div>`;
       }).join('') : ''}
     </div>
@@ -722,45 +781,14 @@ function renderHome(){
     btn.onclick = ()=> startEditArrow(btn.dataset.editArrow);
   });
   document.getElementById('addTargetBtn').onclick = startAddTarget;
-  document.querySelectorAll('[data-delete-asset]').forEach(btn=>{
-    btn.onclick = async ()=>{
-      if(!(await showConfirm('Delete this target from your library?'))) return;
-      data.targetLibrary = data.targetLibrary.filter(a=>a.id!==btn.dataset.deleteAsset);
-      await saveData();
-      render();
-    };
+  document.querySelectorAll('[data-edit-target]').forEach(btn=>{
+    btn.onclick = ()=> startEditTarget(btn.dataset.editTarget);
   });
   document.getElementById('exportBtn').onclick = exportData;
   document.getElementById('importBtn').onclick = ()=> document.getElementById('importFile').click();
   document.getElementById('importFile').onchange = handleImportFile;
   document.querySelectorAll('.row-item').forEach(el=>{
     el.onclick = ()=>{ view={screen:'sessionDetail', id:el.dataset.id}; render(); };
-  });
-  renderTrendChart(flatGroupings);
-}
-function renderTrendChart(flatGroupings){
-  const ctx = document.getElementById('trendCanvas');
-  if(!ctx) return;
-  const withShots = flatGroupings.filter(x=>(x.grouping.impacts||[]).length>0);
-  if(withShots.length===0){
-    ctx.parentElement.innerHTML = '<div class="trend-empty">Log at least one grouping to see your trend.</div>';
-    return;
-  }
-  const labels = withShots.map(x=> fmtDate(x.grouping.createdAt) + (x.grouping.distance? ' · '+x.grouping.distance+'yd':''));
-  destroyChart('trendCanvas');
-  charts['trendCanvas'] = new Chart(ctx, {
-    type:'line',
-    data:{ labels, datasets:[
-      { label:'Extreme spread (in)', data:withShots.map(x=>groupingMetrics(x.grouping).extremeSpread), borderColor:'#E8A33D', backgroundColor:'#E8A33D', tension:0.25, pointRadius:3, borderWidth:2 },
-      { label:'Mean radius (in)', data:withShots.map(x=>groupingMetrics(x.grouping).meanRadius), borderColor:'#7FA65C', backgroundColor:'#7FA65C', tension:0.25, pointRadius:3, borderWidth:2, borderDash:[4,3] }
-    ]},
-    options:{ responsive:true,
-      plugins:{ legend:{ labels:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} } } },
-      scales:{
-        x:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:9}, maxRotation:60, minRotation:60 }, grid:{ color:'#252B1D' } },
-        y:{ ticks:{ color:'#8B9184', font:{family:'IBM Plex Mono', size:10} }, grid:{ color:'#252B1D' }, title:{display:true,text:'inches',color:'#8B9184',font:{family:'IBM Plex Mono',size:10}} }
-      }
-    }
   });
 }
 
@@ -786,7 +814,7 @@ function applyPreviousDistance(flow, dist){
 
 // ---------- NEW SESSION / ADD GROUPING FLOW ----------
 function startNewSession(){
-  flow = { mode:'newSession', step:'chooseTarget', assetDraft:null, targetId:null, sessionId:null, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'', bowId:null, arrowSetupId:null };
+  flow = { mode:'newSession', step:'chooseTarget', assetDraft:null, targetId:null, sessionId:null, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'', bowId:null, arrowSetupId:null, centerOverridePx:null };
   applyPreviousDistance(flow, getPreviousDistance(null));
   const eq = getPreviousEquipment();
   flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
@@ -798,7 +826,7 @@ function startNewChallenge(){
     mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
     bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:3, totalSets:5, oneArrowMode:false,
     sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
-    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null
+    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null, centerOverridePx:null
   };
   const eq = getPreviousEquipment();
   flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
@@ -812,7 +840,7 @@ async function startOneArrowChallenge(){
     mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
     bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:1, totalSets:1, oneArrowMode:true,
     sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
-    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null
+    challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null, centerOverridePx:null
   };
   const eq = getPreviousEquipment();
   flow.bowId = eq.bowId; flow.arrowSetupId = eq.arrowSetupId;
@@ -826,7 +854,7 @@ function startAddTarget(){
 }
 function startAddGrouping(sessionId){
   const s = getSession(sessionId);
-  flow = { mode:'addGrouping', step:'capture', assetDraft:null, targetId:s.targetId, sessionId:s.id, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'' };
+  flow = { mode:'addGrouping', step:'capture', assetDraft:null, targetId:s.targetId, sessionId:s.id, impacts:[], sessionLabel:'', selectedImpactIndex:null, distanceValue:'', customDistance:'', centerOverridePx:s.centerOverridePx||null };
   applyPreviousDistance(flow, getPreviousDistance(sessionId));
   view = {screen:'newSession'};
   render();
@@ -847,6 +875,12 @@ function startEditArrow(arrowId){
   view = {screen:'newSession'};
   render();
 }
+function startEditTarget(assetId){
+  const asset = getAsset(assetId);
+  flow = { mode:'editTarget', step:'editTargetMain', assetId, targetName: asset.name, newCenterPx:null, retroactiveChoice:'no', calibPoints:[], selectedCalibIndex:null, newPixelsPerInch:null };
+  view = {screen:'newSession'};
+  render();
+}
 function cancelFlow(){
   const goTo = (flow && flow.sessionId) ? {screen:'sessionDetail', id:flow.sessionId} : {screen:'home'};
   flow=null; view=goTo; render();
@@ -856,7 +890,8 @@ function renderFlow(){
     chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
     calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
     nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup',
-    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of ${flow.totalSets||5}`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format', oneArrowSafeMax:'Set safe max yardage'
+    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of ${flow.totalSets||5}`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format', oneArrowSafeMax:'Set safe max yardage', sessionCenter:'Center point for this session',
+    editTargetMain:'Edit target', editTargetCenterTap:'Change center point', editTargetCenterConfirm:'Confirm center change', editTargetCalibrate:'Add reference measurement'
   };
   $app.innerHTML = `
     <div class="flow-hdr"><div class="step-label">${stepNames[flow.step]}</div>
@@ -865,7 +900,7 @@ function renderFlow(){
   `;
   document.getElementById('closeFlow').onclick = async ()=>{
     if(flow.step==='savedPrompt' || flow.step==='challengeSummary'){ cancelFlow(); return; }
-    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat','oneArrowSafeMax'];
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat','oneArrowSafeMax','sessionCenter','editTargetMain','editTargetCenterTap','editTargetCenterConfirm','editTargetCalibrate'];
     const isTrivial = trivialSteps.includes(flow.step);
     if(!isTrivial && !(await showConfirm('Discard unsaved changes?', {confirmLabel:'Discard'}))) return;
     if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
@@ -882,6 +917,11 @@ function renderFlow(){
   else if(flow.step==='nameArrow') renderNameArrowStep(body);
   else if(flow.step==='editArrow') renderEditArrowStep(body);
   else if(flow.step==='challengeFormat') renderChallengeFormatStep(body);
+  else if(flow.step==='sessionCenter') renderSessionCenterStep(body);
+  else if(flow.step==='editTargetMain') renderEditTargetMainStep(body);
+  else if(flow.step==='editTargetCenterTap') renderEditTargetCenterTapStep(body);
+  else if(flow.step==='editTargetCenterConfirm') renderEditTargetCenterConfirmStep(body);
+  else if(flow.step==='editTargetCalibrate') renderEditTargetCalibrateStep(body);
   else if(flow.step==='oneArrowSafeMax') renderOneArrowSafeMaxStep(body);
   else if(flow.step==='challengeType') renderChallengeTypeStep(body);
   else if(flow.step==='ringWidth') renderRingWidthStep(body);
@@ -994,6 +1034,211 @@ function renderEditArrowStep(body){
     flow = null; view = {screen:'home'}; render();
   };
 }
+function renderEditTargetMainStep(body){
+  const asset = getAsset(flow.assetId);
+  if(!asset){ flow=null; view={screen:'home'}; render(); return; }
+  const usingSessions = data.sessions.filter(s=>s.targetId===asset.id);
+  const usingChallenges = data.challenges.filter(c=>c.targetId===asset.id);
+  const usedCount = usingSessions.length + usingChallenges.length;
+  const shotCount = usingSessions.reduce((a,s)=>a+(s.groupings||[]).reduce((b,g)=>b+(g.impacts?.length||0),0),0)
+                   + usingChallenges.reduce((a,c)=>a+(c.sets||[]).reduce((b,st)=>b+(st.arrows?.length||0),0),0);
+  const hasUndo = !!asset.previousCenterPx;
+  body.innerHTML = `
+    <div class="tap-wrap"><img src="${asset.dataUrl}"></div>
+    <label class="f-label">Target name</label>
+    <input type="text" id="targetNameInput" value="${escapeHtml(flow.targetName)}">
+    <button class="btn secondary" id="saveNameBtn" style="margin-bottom:16px;">Save name</button>
+
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:16px;">
+      <button class="btn" id="changeCenterBtn" style="margin-bottom:8px;">Change Center Point</button>
+      ${hasUndo ? `<button class="btn secondary" id="undoCenterBtn">Undo center change (${fmtDate(asset.previousCenterChangedAt)})</button>` : ''}
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:16px;">
+      <p class="instr">Add a reference measurement to refine this target's scale for better accuracy going forward. This does not change past logged data.</p>
+      <button class="btn" id="recalibrateBtn">Add Reference Measurement</button>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:16px;">
+      <p class="instr" style="color:var(--muted);">This target is used in ${usedCount} session/challenge${usedCount!==1?'s':''} (${shotCount} logged shot${shotCount!==1?'s':''}).</p>
+      <button class="btn secondary" id="deleteKeepBtn" style="margin-bottom:8px;">Delete Target (keep session/challenge data)</button>
+      <button class="btn danger" id="deleteAllBtn">Delete Target and All Its Data</button>
+    </div>
+  `;
+  document.getElementById('targetNameInput').oninput = e=>{ flow.targetName = e.target.value; };
+  document.getElementById('saveNameBtn').onclick = async ()=>{
+    if(!flow.targetName.trim()){ await showAlert('Enter a name for this target.'); return; }
+    asset.name = flow.targetName.trim();
+    await saveData();
+    toast('Saved ✓');
+  };
+  document.getElementById('changeCenterBtn').onclick = ()=>{
+    flow.newCenterPx = {...asset.centerPx};
+    flow.step = 'editTargetCenterTap';
+    render();
+  };
+  document.getElementById('recalibrateBtn').onclick = ()=>{
+    flow.calibPoints = [];
+    flow.selectedCalibIndex = null;
+    flow.step = 'editTargetCalibrate';
+    render();
+  };
+  const undoBtn = document.getElementById('undoCenterBtn');
+  if(undoBtn) undoBtn.onclick = async ()=>{
+    const msg = asset.previousCenterWasRetroactive
+      ? 'Undo the last center point change? This will revert to the previous center point and recalculate past impacts back to it.'
+      : 'Undo the last center point change? This will revert to the previous center point.';
+    if(!(await showConfirm(msg, {confirmLabel:'Undo'}))) return;
+    const oldCenter = asset.previousCenterPx;
+    if(asset.previousCenterWasRetroactive) retroactivelyRecenterTarget(asset.id, oldCenter);
+    asset.centerPx = oldCenter;
+    asset.previousCenterPx = null;
+    asset.previousCenterWasRetroactive = false;
+    asset.previousCenterChangedAt = null;
+    await saveData();
+    render();
+  };
+  document.getElementById('deleteKeepBtn').onclick = async ()=>{
+    const msg = `Delete "${asset.name}" from your target library? Your ${usedCount} existing session${usedCount!==1?'s':''}/challenge${usedCount!==1?'s':''} will keep this photo and all their data — you just won't be able to pick this target for new sessions.`;
+    if(!(await showConfirm(msg, {confirmLabel:'Delete'}))) return;
+    asset.archived = true;
+    await saveData();
+    flow = null; view = {screen:'home'}; render();
+  };
+  document.getElementById('deleteAllBtn').onclick = async ()=>{
+    const msg = usedCount>0
+      ? `Delete "${asset.name}" AND all its data? This will permanently delete ${usedCount} session${usedCount!==1?'s':''}/challenge${usedCount!==1?'s':''} and ${shotCount} logged shot${shotCount!==1?'s':''}. This cannot be undone.`
+      : `Delete "${asset.name}"? This cannot be undone.`;
+    if(!(await showConfirm(msg, {confirmLabel:'Delete All'}))) return;
+    const deletedSessionIds = new Set(usingSessions.map(s=>s.id));
+    data.sessions = data.sessions.filter(s=>s.targetId!==asset.id);
+    data.challenges = data.challenges.filter(c=>c.targetId!==asset.id);
+    data.targetLibrary = data.targetLibrary.filter(a=>a.id!==asset.id);
+    data.equipmentChanges = data.equipmentChanges.filter(c=> !deletedSessionIds.has(c.sessionId));
+    await saveData();
+    flow = null; view = {screen:'home'}; render();
+  };
+}
+function renderEditTargetCenterTapStep(body){
+  const asset = getAsset(flow.assetId);
+  body.innerHTML = `
+    <p class="instr">Tap the new center point for this target, then fine-tune with the arrows if needed.</p>
+    <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
+    ${adjusterHtml('Fine-tune new center point')}
+    <button class="btn" id="centerTapContinueBtn" style="margin-top:10px;">Continue</button>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCenter(svg, flow.newCenterPx);
+  wrap.addEventListener('click', e=>{
+    const rect = wrap.getBoundingClientRect();
+    flow.newCenterPx = { x:(e.clientX-rect.left)/rect.width*asset.imgW, y:(e.clientY-rect.top)/rect.height*asset.imgH };
+    drawCenter(svg, flow.newCenterPx);
+  });
+  wireAdjuster(body, (dx,dy)=>{
+    flow.newCenterPx.x = clamp(flow.newCenterPx.x+dx, 0, asset.imgW);
+    flow.newCenterPx.y = clamp(flow.newCenterPx.y+dy, 0, asset.imgH);
+    drawCenter(svg, flow.newCenterPx);
+  });
+  document.getElementById('centerTapContinueBtn').onclick = ()=>{ flow.step = 'editTargetCenterConfirm'; render(); };
+}
+function renderEditTargetCenterConfirmStep(body){
+  const asset = getAsset(flow.assetId);
+  const usingSessions = data.sessions.filter(s=>s.targetId===asset.id && !s.centerOverridePx);
+  const usingChallenges = data.challenges.filter(c=>c.targetId===asset.id && !c.centerOverridePx);
+  const affectedCount = usingSessions.length + usingChallenges.length;
+  body.innerHTML = `
+    <p class="instr">Do you want past impacts logged on this target to reflect the new center point?</p>
+    <div class="chip-row" id="retroChips" style="flex-direction:column;align-items:stretch;">
+      <button class="chip ${flow.retroactiveChoice==='yes'?'active':''}" data-choice="yes" style="text-align:left;margin-bottom:6px;">
+        <b>Yes, update past data</b><br><span style="font-size:10px;color:var(--muted);">Recalculates ${affectedCount} existing session/challenge${affectedCount!==1?'s':''} that used the old center point.</span>
+      </button>
+      <button class="chip ${flow.retroactiveChoice==='no'?'active':''}" data-choice="no" style="text-align:left;margin-bottom:6px;">
+        <b>No, only future data</b><br><span style="font-size:10px;color:var(--muted);">Past sessions/challenges keep their original measurements. Only new ones use the new center.</span>
+      </button>
+    </div>
+    <p class="instr" style="color:var(--muted);">You'll be able to undo this once from the target's edit screen if needed.</p>
+    <button class="btn" id="confirmCenterChangeBtn">Confirm Change</button>
+  `;
+  document.querySelectorAll('#retroChips .chip').forEach(c=>{
+    c.onclick = ()=>{ flow.retroactiveChoice = c.dataset.choice; renderEditTargetCenterConfirmStep(body); };
+  });
+  document.getElementById('confirmCenterChangeBtn').onclick = async ()=>{
+    const retro = flow.retroactiveChoice==='yes';
+    const msg = retro
+      ? `Move this target's center point and recalculate ${affectedCount} existing session/challenge${affectedCount!==1?'s':''} to match? This can be undone once.`
+      : `Move this target's center point? Past data will not change — only new sessions/challenges will use it. This can be undone once.`;
+    if(!(await showConfirm(msg, {confirmLabel:'Confirm'}))) return;
+    asset.previousCenterPx = asset.centerPx;
+    asset.previousCenterWasRetroactive = retro;
+    asset.previousCenterChangedAt = new Date().toISOString();
+    if(retro) retroactivelyRecenterTarget(asset.id, flow.newCenterPx);
+    asset.centerPx = flow.newCenterPx;
+    await saveData();
+    flow.step = 'editTargetMain';
+    render();
+  };
+}
+function renderEditTargetCalibrateStep(body){
+  const asset = getAsset(flow.assetId);
+  const showForm = flow.calibPoints.length===2;
+  body.innerHTML = `
+    <p class="instr">Tap <b>two points</b> a known real-world distance apart to refine this target's scale.</p>
+    <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
+    ${flow.calibPoints.length>0 ? `
+      <div class="chip-row" id="calibChips">
+        ${flow.calibPoints.map((p,i)=>`<button class="chip ${flow.selectedCalibIndex===i?'active':''}" data-idx="${i}">Point ${i+1}</button>`).join('')}
+      </div>
+      ${adjusterHtml('Fine-tune selected point')}
+    ` : ''}
+    <div class="btn-row">
+      <button class="btn secondary" id="undoPointBtn" ${flow.calibPoints.length===0?'disabled':''}>Undo last point</button>
+      <button class="btn secondary" id="resetPointsBtn" ${flow.calibPoints.length===0?'disabled':''}>Reset all</button>
+    </div>
+    <div id="calibForm" style="display:${showForm?'block':'none'};margin-top:12px;">
+      <label class="f-label">Real-world distance between those points (inches)</label>
+      <input type="number" id="realDistInput" step="0.01" placeholder="e.g. 3.0">
+      <button class="btn" id="saveCalibBtn">Save new scale</button>
+    </div>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCalibPoints(svg, flow.calibPoints, flow.selectedCalibIndex);
+  wrap.addEventListener('click', e=>{
+    if(flow.calibPoints.length>=2) return;
+    const rect = wrap.getBoundingClientRect();
+    flow.calibPoints.push({ x:(e.clientX-rect.left)/rect.width*asset.imgW, y:(e.clientY-rect.top)/rect.height*asset.imgH });
+    flow.selectedCalibIndex = flow.calibPoints.length-1;
+    renderEditTargetCalibrateStep(body);
+  });
+  if(flow.calibPoints.length>0){
+    document.getElementById('calibChips').querySelectorAll('.chip').forEach(c=>{
+      c.onclick = ()=>{ flow.selectedCalibIndex = parseInt(c.dataset.idx); renderEditTargetCalibrateStep(body); };
+    });
+    wireAdjuster(body, (dx,dy)=>{
+      const p = flow.calibPoints[flow.selectedCalibIndex];
+      p.x = clamp(p.x+dx, 0, asset.imgW); p.y = clamp(p.y+dy, 0, asset.imgH);
+      drawCalibPoints(svg, flow.calibPoints, flow.selectedCalibIndex);
+    });
+  }
+  document.getElementById('undoPointBtn').onclick = ()=>{
+    flow.calibPoints.pop();
+    flow.selectedCalibIndex = flow.calibPoints.length? flow.calibPoints.length-1 : null;
+    renderEditTargetCalibrateStep(body);
+  };
+  document.getElementById('resetPointsBtn').onclick = ()=>{ flow.calibPoints=[]; flow.selectedCalibIndex=null; renderEditTargetCalibrateStep(body); };
+  if(showForm){
+    document.getElementById('saveCalibBtn').onclick = async ()=>{
+      const val = parseFloat(document.getElementById('realDistInput').value);
+      if(!val||val<=0){ await showAlert('Enter a distance greater than 0.'); return; }
+      const [a,b] = flow.calibPoints;
+      const newScale = Math.hypot(a.x-b.x,a.y-b.y)/val;
+      if(!(await showConfirm("Update this target's scale? This only affects accuracy going forward — past logged data will not change.", {confirmLabel:'Save'}))) return;
+      asset.pixelsPerInch = newScale;
+      await saveData();
+      flow.step = 'editTargetMain';
+      render();
+    };
+  }
+}
 function renderNameArrowStep(body){
   const bow = getBow(flow.bowId);
   body.innerHTML = `
@@ -1023,7 +1268,7 @@ function renderNameArrowStep(body){
 }
 
 function renderChooseTarget(body){
-  const lib = data.targetLibrary;
+  const lib = data.targetLibrary.filter(a=>!a.archived);
   const isAddTarget = flow.mode==='addTarget';
   body.innerHTML = `
     <p class="instr">${isAddTarget ? 'Upload a target photo to save it to your library for future sessions.' : "Upload a new target photo, or reuse one already in your library — saved targets and their calibration stick around indefinitely."}</p>
@@ -1049,7 +1294,7 @@ function renderChooseTarget(body){
     render();
   };
   body.querySelectorAll('[data-asset]').forEach(btn=>{
-    btn.onclick = ()=>{ flow.targetId = btn.dataset.asset; flow.step = 'chooseEquipment'; render(); };
+    btn.onclick = ()=>{ flow.targetId = btn.dataset.asset; flow.step = 'sessionCenter'; render(); };
   });
 }
 
@@ -1157,7 +1402,7 @@ function renderCenterStep(body){
       return;
     }
     flow.targetId = asset.id;
-    flow.step = 'chooseEquipment';
+    flow.step = 'sessionCenter';
     render();
   };
 }
@@ -1166,6 +1411,41 @@ function drawCenter(svg, c){
   svg.innerHTML = `<line x1="${c.x-14}" y1="${c.y}" x2="${c.x+14}" y2="${c.y}" stroke="#E8A33D" stroke-width="2"/>
     <line x1="${c.x}" y1="${c.y-14}" x2="${c.x}" y2="${c.y+14}" stroke="#E8A33D" stroke-width="2"/>
     <circle cx="${c.x}" cy="${c.y}" r="16" fill="none" stroke="#E8A33D" stroke-width="1.5"/>`;
+}
+function renderSessionCenterStep(body){
+  const asset = getAsset(flow.targetId);
+  const usingCustom = !!flow.centerOverridePx;
+  body.innerHTML = `
+    <p class="instr">This target's saved center point is shown below. You can use it as-is, or set a different center just for this ${flow.mode==='newChallenge'?'challenge':'session'} — the target's saved center won't change, only how this ${flow.mode==='newChallenge'?'challenge\'s':'session\'s'} impacts are measured.${usingCustom?' Tap the image again or use the arrows to adjust.':''}</p>
+    <div class="tap-wrap" id="tapWrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}"></svg></div>
+    ${usingCustom ? adjusterHtml('Fine-tune this session\'s center point') : ''}
+    <div class="btn-row">
+      <button class="btn secondary" id="useDefaultBtn" ${!usingCustom?'disabled':''}>Use saved center point</button>
+      <button class="btn" id="useCustomBtn" ${usingCustom?'disabled':''}>Set custom center for this one</button>
+    </div>
+    <button class="btn" id="sessionCenterContinueBtn" style="margin-top:14px;">Continue</button>
+  `;
+  const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
+  drawCenter(svg, flow.centerOverridePx || asset.centerPx);
+  wrap.addEventListener('click', e=>{
+    if(!flow.centerOverridePx) return;
+    const rect = wrap.getBoundingClientRect();
+    flow.centerOverridePx = { x:(e.clientX-rect.left)/rect.width*asset.imgW, y:(e.clientY-rect.top)/rect.height*asset.imgH };
+    drawCenter(svg, flow.centerOverridePx);
+  });
+  document.getElementById('useDefaultBtn').onclick = ()=>{ flow.centerOverridePx = null; renderSessionCenterStep(body); };
+  document.getElementById('useCustomBtn').onclick = ()=>{
+    flow.centerOverridePx = {...asset.centerPx};
+    renderSessionCenterStep(body);
+  };
+  if(usingCustom){
+    wireAdjuster(body, (dx,dy)=>{
+      flow.centerOverridePx.x = clamp(flow.centerOverridePx.x+dx, 0, asset.imgW);
+      flow.centerOverridePx.y = clamp(flow.centerOverridePx.y+dy, 0, asset.imgH);
+      drawCenter(svg, flow.centerOverridePx);
+    });
+  }
+  document.getElementById('sessionCenterContinueBtn').onclick = ()=>{ flow.step='chooseEquipment'; render(); };
 }
 
 function renderCaptureStep(body){
@@ -1193,12 +1473,12 @@ function renderCaptureStep(body){
     </div>
   `;
   const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
-  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
   wrap.addEventListener('click', e=>{
     const rect = wrap.getBoundingClientRect();
     const x = (e.clientX-rect.left)/rect.width*asset.imgW, y = (e.clientY-rect.top)/rect.height*asset.imgH;
     const p = { xPx:x, yPx:y, order:flow.impacts.length+1 };
-    recomputeImpact(p, asset);
+    recomputeImpact(p, asset, flow.centerOverridePx);
     flow.impacts.push(p);
     flow.selectedImpactIndex = flow.impacts.length-1;
     renderCaptureStep(body);
@@ -1211,8 +1491,8 @@ function renderCaptureStep(body){
       wireAdjuster(body, (dx,dy)=>{
         const p = flow.impacts[flow.selectedImpactIndex];
         p.xPx = clamp(p.xPx+dx, 0, asset.imgW); p.yPx = clamp(p.yPx+dy, 0, asset.imgH);
-        recomputeImpact(p, asset);
-        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+        recomputeImpact(p, asset, flow.centerOverridePx);
+        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
       });
     }
   }
@@ -1230,7 +1510,7 @@ function renderCaptureStep(body){
     if(!distVal || distVal<=0){ await showAlert('Select or enter the shooting distance for this grouping.'); return; }
     const grouping = { id:uid(), distance:distVal, impacts:flow.impacts, createdAt:new Date().toISOString() };
     if(flow.mode==='newSession'){
-      const session = { id:uid(), date:new Date().toISOString(), label:flow.sessionLabel||'', targetId:flow.targetId, bowId:flow.bowId||null, arrowSetupId:flow.arrowSetupId||null, groupings:[grouping] };
+      const session = { id:uid(), date:new Date().toISOString(), label:flow.sessionLabel||'', targetId:flow.targetId, bowId:flow.bowId||null, arrowSetupId:flow.arrowSetupId||null, centerOverridePx:flow.centerOverridePx||null, groupings:[grouping] };
       data.sessions.push(session);
       flow.sessionId = session.id;
       flow.mode = 'addGrouping';
@@ -1288,7 +1568,7 @@ function renderChallengeFormatStep(body){
 }
 function renderOneArrowSafeMaxStep(body){
   body.innerHTML = `
-    <p class="instr">This challenge fires one arrow at a random distance between <b>15 yards</b> and the safe max you set below.</p>
+    <p class="instr">This is your cold shot — one arrow, no warm-up, at a random distance between <b>15 yards</b> and the safe max you set below.</p>
     <label class="f-label">Safe max yardage</label>
     <input type="number" id="oneArrowMaxInput" step="1" placeholder="e.g. 60" value="${flow.safeMaxYardage||''}">
     <button class="btn" id="oneArrowContinueBtn" style="margin-top:14px;">Continue</button>
@@ -1414,13 +1694,13 @@ function renderCaptureSetStep(body){
     </div>
   `;
   const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
-  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
   wrap.addEventListener('click', e=>{
     if(flow.impacts.length>=n) return;
     const rect = wrap.getBoundingClientRect();
     const x = (e.clientX-rect.left)/rect.width*asset.imgW, y = (e.clientY-rect.top)/rect.height*asset.imgH;
     const p = { xPx:x, yPx:y, order:flow.impacts.length+1 };
-    recomputeImpact(p, asset);
+    recomputeImpact(p, asset, flow.centerOverridePx);
     flow.impacts.push(p);
     flow.selectedImpactIndex = flow.impacts.length-1;
     renderCaptureSetStep(body);
@@ -1433,8 +1713,8 @@ function renderCaptureSetStep(body){
       wireAdjuster(body, (dx,dy)=>{
         const p = flow.impacts[flow.selectedImpactIndex];
         p.xPx = clamp(p.xPx+dx, 0, asset.imgW); p.yPx = clamp(p.yPx+dy, 0, asset.imgH);
-        recomputeImpact(p, asset);
-        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex);
+        recomputeImpact(p, asset, flow.centerOverridePx);
+        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
       });
     }
   }
@@ -1455,7 +1735,7 @@ function renderCaptureSetStep(body){
       const challenge = {
         id: uid(), date: new Date().toISOString(), label: flow.label||'',
         oneArrowMode: !!flow.oneArrowMode,
-        targetId: flow.targetId, bowId: flow.bowId||null, arrowSetupId: flow.arrowSetupId||null,
+        targetId: flow.targetId, bowId: flow.bowId||null, arrowSetupId: flow.arrowSetupId||null, centerOverridePx: flow.centerOverridePx||null,
         ringWidth: flow.ringWidth, challengeType: flow.challengeType, arrowsPerSet: flow.arrowsPerSet, sets: flow.sets
       };
       data.challenges.push(challenge);
@@ -1470,13 +1750,14 @@ function renderChallengeSummaryStep(body){
   const challenge = flow.lastChallenge;
   const totals = challengeTotals(challenge);
   const asset = getAsset(challenge.targetId);
-  const {x:cx,y:cy} = asset.centerPx;
+  const {x:cx,y:cy} = challenge.centerOverridePx || asset.centerPx;
+  const r = impactRadiusPx(asset);
   let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   challenge.sets.forEach((set,idx)=>{
     const color = PALETTE[idx%PALETTE.length];
     set.arrows.forEach(p=>{
-      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
+      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
     });
   });
   body.innerHTML = `
@@ -1502,13 +1783,14 @@ function renderChallengeSummaryStep(body){
   `;
   document.getElementById('doneChallengeBtn').onclick = ()=>{ flow=null; view={screen:'home'}; render(); };
 }
-function drawCaptureState(svg, asset, impacts, selectedIdx){
-  const {x:cx,y:cy} = asset.centerPx;
+function drawCaptureState(svg, asset, impacts, selectedIdx, overrideCenterPx){
+  const {x:cx,y:cy} = overrideCenterPx || asset.centerPx;
+  const r = impactRadiusPx(asset);
   let s = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
            <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   impacts.forEach((p,i)=>{
     const isSel = i===selectedIdx;
-    s += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${isSel?8:6}" fill="#C1502E" fill-opacity="0.9" stroke="${isSel?'#E8A33D':'#12140F'}" stroke-width="${isSel?2.5:1.5}"/>`;
+    s += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${isSel?r*1.4:r}" fill="#C1502E" fill-opacity="0.9" stroke="${isSel?'#E8A33D':'#12140F'}" stroke-width="${isSel?2.5:1.5}"/>`;
   });
   svg.innerHTML = s;
 }
@@ -1541,12 +1823,13 @@ function renderSessionDetail(){
   const groupings = s.groupings||[];
   let overlaySvg = '';
   if(asset){
-    const {x:cx,y:cy} = asset.centerPx;
+    const {x:cx,y:cy} = s.centerOverridePx || asset.centerPx;
+    const r = impactRadiusPx(asset);
     overlaySvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                   <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
     groupings.forEach((g,idx)=>{
       const color = PALETTE[idx%PALETTE.length];
-      (g.impacts||[]).forEach(p=> overlaySvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="6" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`);
+      (g.impacts||[]).forEach(p=> overlaySvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`);
     });
   }
   const equipLine = (s.bowId||s.arrowSetupId) ? [s.bowId?getBow(s.bowId)?.name:null, s.arrowSetupId?getArrowSetup(s.arrowSetupId)?.name:null].filter(Boolean).join(' · ') : '';
@@ -1601,12 +1884,13 @@ function renderGroupingDetail(){
   if(!g){ view={screen:'sessionDetail', id:s.id}; render(); return; }
   const asset = getAsset(s.targetId);
   const m = groupingMetrics(g);
-  const {x:cx,y:cy} = asset.centerPx;
+  const {x:cx,y:cy} = s.centerOverridePx || asset.centerPx;
+  const r = impactRadiusPx(asset);
   let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   (g.impacts||[]).forEach(p=>{
-    dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="#C1502E" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>
-                <text x="${p.xPx}" y="${p.yPx+3}" font-family="IBM Plex Mono" font-size="8" fill="#12140F" text-anchor="middle">${p.order}</text>`;
+    dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="#C1502E" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>
+                <text x="${p.xPx}" y="${p.yPx+3}" font-family="IBM Plex Mono" font-size="${Math.min(8,r)}" fill="#12140F" text-anchor="middle">${p.order}</text>`;
   });
   $app.innerHTML = `
     <div class="flow-hdr">
@@ -1692,15 +1976,19 @@ function renderAllImpacts(){
   const size = 320, cx=size/2, cy=size/2;
   let maxR = 1;
   visible.forEach(p=> maxR = Math.max(maxR, Math.hypot(p.dxIn,p.dyIn)));
-  const ringStep = maxR<=3?1:(maxR<=6?2:Math.ceil(maxR/4));
-  const ringsTo = ringStep*Math.ceil(maxR/ringStep);
+  const visibleR = maxR / allImpactsZoom;
+  const ringStep = visibleR<=1.5?0.5:(visibleR<=3?1:(visibleR<=6?2:Math.ceil(visibleR/4)));
+  const ringsTo = ringStep*Math.ceil(visibleR/ringStep);
   const pxPerIn = (size/2-16)/ringsTo;
 
   let svg = `<svg viewBox="0 0 ${size} ${size}" width="100%" style="max-width:320px;display:block;margin:0 auto;">`;
   svg += `<rect x="0" y="0" width="${size}" height="${size}" fill="#3D4430"/>`;
+  svg += `<clipPath id="chartClip"><rect x="0" y="0" width="${size}" height="${size}"/></clipPath>`;
+  svg += `<g clip-path="url(#chartClip)">`;
+  const ringLabelDecimals = ringStep % 1 !== 0 ? 1 : 0;
   for(let r=ringStep;r<=ringsTo;r+=ringStep){
     svg += `<circle cx="${cx}" cy="${cy}" r="${r*pxPerIn}" fill="none" stroke="#FF6600" stroke-width="1.75"/>`;
-    svg += `<text x="${cx+3}" y="${cy-r*pxPerIn-3}" font-family="IBM Plex Mono" font-size="10" font-weight="700" fill="#FF6600">${r}"</text>`;
+    svg += `<text x="${cx+3}" y="${cy-r*pxPerIn-3}" font-family="IBM Plex Mono" font-size="10" font-weight="700" fill="#FF6600">${fmt(r,ringLabelDecimals)}"</text>`;
   }
   svg += `<line x1="${cx-8}" y1="${cy}" x2="${cx+8}" y2="${cy}" stroke="#FF6600" stroke-width="1.75"/>
           <line x1="${cx}" y1="${cy-8}" x2="${cx}" y2="${cy+8}" stroke="#FF6600" stroke-width="1.75"/>`;
@@ -1718,7 +2006,7 @@ function renderAllImpacts(){
       <circle cx="${ax}" cy="${ay}" r="10" fill="none" stroke="#7FA65C" stroke-width="1.5"/>
     </g>`;
   }
-  svg += `</svg>`;
+  svg += `</g></svg>`;
 
   const distanceLegend = distances.map(dist=>{
     const count = flat.filter(p=>p.distance===dist).length;
@@ -1774,7 +2062,13 @@ function renderAllImpacts(){
     </div>
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Composite grouping — color = distance, shape = arrow setup</span>
-      ${svg}
+      <div style="position:relative;max-width:320px;margin:0 auto;">
+        ${svg}
+        <div style="position:absolute;bottom:8px;right:8px;display:flex;flex-direction:column;gap:4px;">
+          <button class="btn small" id="zoomInBtn" style="width:34px;height:34px;padding:0;font-size:18px;line-height:1;">+</button>
+          <button class="btn small secondary" id="zoomOutBtn" style="width:34px;height:34px;padding:0;font-size:18px;line-height:1;">−</button>
+        </div>
+      </div>
       <button class="btn secondary small" id="toggleAvgCenter" style="margin-top:10px;">${showAvgCenter?'✓ ':''}Show average center</button>
       <label class="f-label" style="margin-top:14px;">Yardage</label>
       <div class="legend">
@@ -1792,6 +2086,8 @@ function renderAllImpacts(){
   `;
   document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
   document.getElementById('toggleAvgCenter').onclick = ()=>{ showAvgCenter = !showAvgCenter; renderAllImpacts(); };
+  document.getElementById('zoomInBtn').onclick = ()=>{ allImpactsZoom = Math.min(8, allImpactsZoom*1.4); renderAllImpacts(); };
+  document.getElementById('zoomOutBtn').onclick = ()=>{ allImpactsZoom = Math.max(0.25, allImpactsZoom/1.4); renderAllImpacts(); };
   document.querySelectorAll('#dateRangeChips .chip').forEach(c=>{
     c.onclick = ()=>{ allImpactsDateRange = c.dataset.range; allImpactsBowSet=null; allImpactsArrowSet=null; allImpactsFilter=null; renderAllImpacts(); };
   });
@@ -1835,13 +2131,14 @@ function renderChallengeDetail(){
   const bow = challenge.bowId ? getBow(challenge.bowId) : null;
   const arrow = challenge.arrowSetupId ? getArrowSetup(challenge.arrowSetupId) : null;
   const equipLabel = [bow?bow.name:null, arrow?arrow.name:null].filter(Boolean).join(' · ');
-  const {x:cx,y:cy} = asset.centerPx;
+  const {x:cx,y:cy} = challenge.centerOverridePx || asset.centerPx;
+  const r = impactRadiusPx(asset);
   let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   challenge.sets.forEach((set,idx)=>{
     const color = PALETTE[idx%PALETTE.length];
     set.arrows.forEach(p=>{
-      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="7" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
+      dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
     });
   });
   $app.innerHTML = `
