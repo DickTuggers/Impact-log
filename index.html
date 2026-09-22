@@ -323,11 +323,36 @@ function scoreForDistance(distIn, ringWidth){
   if(band>=6) return 0;
   return 10 - band;
 }
+function ringOverlaySvg(cx, cy, pixelsPerInch, ringWidth){
+  let s = `<circle cx="${cx}" cy="${cy}" r="${X_RADIUS_IN*pixelsPerInch}" fill="none" stroke="#FF6600" stroke-width="1" stroke-opacity="0.5"/>`;
+  for(let i=1;i<=6;i++){
+    s += `<circle cx="${cx}" cy="${cy}" r="${i*ringWidth*pixelsPerInch}" fill="none" stroke="#FF6600" stroke-width="1" stroke-opacity="0.35"/>`;
+  }
+  return s;
+}
 function getChallenge(id){ return data.challenges.find(c=>c.id===id); }
 function challengeTotals(challenge){
   let total=0, count=0;
   (challenge.sets||[]).forEach(set=> (set.arrows||[]).forEach(a=>{ total+=a.score; count++; }));
   return { total, max: count*11, count };
+}
+function fatigueBreakdown(challenge){
+  const arrows = (challenge.sets && challenge.sets[0] && challenge.sets[0].arrows) || [];
+  const half = Math.floor(arrows.length/2);
+  const first = arrows.slice(0, half);
+  const second = arrows.slice(arrows.length-half);
+  function spreadOf(list){
+    let max=0;
+    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++){
+      const d = Math.hypot(list[i].dxIn-list[j].dxIn, list[i].dyIn-list[j].dyIn);
+      if(d>max) max=d;
+    }
+    return max;
+  }
+  const firstSpread = spreadOf(first), secondSpread = spreadOf(second);
+  const deltaIn = secondSpread-firstSpread;
+  const deltaPct = firstSpread>0 ? (deltaIn/firstSpread)*100 : null;
+  return { half, firstCount:first.length, secondCount:second.length, firstSpread, secondSpread, deltaIn, deltaPct };
 }
 function allChallengesFlat(){
   return [...data.challenges].sort((a,b)=> new Date(a.date)-new Date(b.date));
@@ -335,12 +360,54 @@ function allChallengesFlat(){
 function oneArrowCooldownStatus(){
   const last = data.challenges.filter(c=>c.oneArrowMode).sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
   if(!last) return {ok:true};
-  const elapsedMs = Date.now() - new Date(last.date).getTime();
-  const remainingMs = 24*60*60*1000 - elapsedMs;
-  if(remainingMs<=0) return {ok:true};
+  const lastDate = new Date(last.date);
+  const now = new Date();
+  const sameDay = lastDate.getFullYear()===now.getFullYear() && lastDate.getMonth()===now.getMonth() && lastDate.getDate()===now.getDate();
+  if(!sameDay) return {ok:true};
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()+1, 0, 0, 0, 0);
+  const remainingMs = nextMidnight.getTime() - now.getTime();
   const hrs = Math.floor(remainingMs/3600000);
   const mins = Math.round((remainingMs%3600000)/60000);
-  return {ok:false, message: `You can attempt this again in ${hrs}h ${mins}m.`};
+  return {ok:false, message: `You've already taken today's cold shot — try again after midnight (in ${hrs}h ${mins}m).`};
+}
+function getBestMultiChallenge(){
+  let best = null;
+  data.challenges.filter(c=>!c.oneArrowMode && !c.fatigueLadder).forEach(c=>{
+    const p = challengePercentage(c);
+    if(p.possible>0 && (!best || p.pct>best.p.pct)) best = {c, p};
+  });
+  return best;
+}
+function getBestColdShotChallenge(){
+  let best=null, bestScore=null;
+  data.challenges.filter(c=>c.oneArrowMode).forEach(c=>{
+    const t = challengeTotals(c).total;
+    if(bestScore===null || t>bestScore){ bestScore=t; best=c; }
+  });
+  return best;
+}
+async function startRematch(challengeId){
+  const source = getChallenge(challengeId);
+  if(!source){ await showAlert('That challenge could not be found.'); return; }
+  const asset = getAsset(source.targetId);
+  if(!asset){ await showAlert("The original target for this challenge is no longer available, so it can't be rematched exactly."); return; }
+  if(source.oneArrowMode){
+    const status = oneArrowCooldownStatus();
+    if(!status.ok){ await showAlert(`This challenge can only be attempted once per day. ${status.message}`); return; }
+  }
+  flow = {
+    mode:'newChallenge', step:'captureSet',
+    targetId: source.targetId, bowId: source.bowId||null, arrowSetupId: source.arrowSetupId||null,
+    label: source.label||'', ringWidth: source.ringWidth, arrowsPerSet: source.arrowsPerSet||3,
+    totalSets: (source.sets||[]).length, oneArrowMode: !!source.oneArrowMode, fatigueLadder: !!source.fatigueLadder,
+    sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
+    challengeType: source.challengeType||'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'',
+    setDistances: (source.sets||[]).map(s=>s.distance),
+    centerOverridePx: source.centerOverridePx||null,
+    rematchOf: source.id
+  };
+  view = {screen:'newSession'};
+  render();
 }
 function allGroupingsFlat(){
   const out = [];
@@ -481,6 +548,7 @@ function render(){
   else if(view.screen==='equipmentTrends') renderEquipmentTrends();
   else if(view.screen==='equipmentChanges') renderEquipmentChanges();
   else if(view.screen==='challengeDetail') renderChallengeDetail();
+  else if(view.screen==='challengeHistory') renderChallengeHistory();
 }
 
 function renderAvgImpactSvg(flatImpacts){
@@ -549,6 +617,14 @@ function renderHome(){
     }
   });
   const avgGroupSize = spreadValues.length ? spreadValues.reduce((a,v)=>a+v,0)/spreadValues.length : null;
+  const bestByDistance = {};
+  flatGroupings.forEach(({grouping})=>{
+    const m = groupingMetrics(grouping);
+    if(m.count>=2 && grouping.distance!=null){
+      if(!bestByDistance[grouping.distance] || m.extremeSpread<bestByDistance[grouping.distance]) bestByDistance[grouping.distance]=m.extremeSpread;
+    }
+  });
+  const bestByDistanceList = Object.keys(bestByDistance).map(Number).sort((a,b)=>a-b);
   const flatImpacts = [];
   matchingSessions.forEach(s=> (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=>{
     flatImpacts.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date});
@@ -558,7 +634,7 @@ function renderHome(){
   const arrowOptions = homeFilterBow!=='all' ? arrowsForBow(homeFilterBow) : [];
 
   const matchingChallenges = challengesMatchingHomeFilter();
-  const multiChallenges = matchingChallenges.filter(c=>!c.oneArrowMode);
+  const multiChallenges = matchingChallenges.filter(c=>!c.oneArrowMode && !c.fatigueLadder);
   const coldShotChallenges = matchingChallenges.filter(c=>c.oneArrowMode);
   const multiScored = multiChallenges.map(c=>({c, p:challengePercentage(c)})).filter(x=>x.p.possible>0);
   const avgChallengePct = multiScored.length ? multiScored.reduce((a,x)=>a+x.p.pct,0)/multiScored.length : null;
@@ -568,6 +644,35 @@ function renderHome(){
   const avgColdShot = coldShotScores.length ? coldShotScores.reduce((a,v)=>a+v,0)/coldShotScores.length : null;
   let bestColdShot = null, bestColdShotChallenge = null;
   coldShotChallenges.forEach(c=>{ const t=challengeTotals(c).total; if(bestColdShot===null || t>bestColdShot){ bestColdShot=t; bestColdShotChallenge=c; } });
+
+  const multiScoredChrono = [...multiScored].sort((a,b)=> new Date(a.c.date)-new Date(b.c.date));
+  let currentStreak = 0;
+  for(let i=multiScoredChrono.length-1; i>0; i--){
+    if(multiScoredChrono[i].p.pct > multiScoredChrono[i-1].p.pct) currentStreak++;
+    else break;
+  }
+  const daysSincePR = bestChallenge ? Math.floor((Date.now()-new Date(bestChallenge.c.date).getTime())/86400000) : null;
+  const coldShotChrono = [...coldShotChallenges].sort((a,b)=> new Date(a.date)-new Date(b.date));
+  let coldShotStreak = 0;
+  for(let i=coldShotChrono.length-1; i>=0; i--){
+    if(challengeTotals(coldShotChrono[i]).total >= 9) coldShotStreak++;
+    else break;
+  }
+  const scoreByDistance = {};
+  multiChallenges.forEach(c=>{
+    (c.sets||[]).forEach(set=>{
+      if(set.distance==null || !set.arrows || !set.arrows.length) return;
+      const earned = set.arrows.reduce((a,ar)=>a+ar.score,0);
+      const possible = set.arrows.length*10;
+      const pct = (earned/possible)*100;
+      if(!scoreByDistance[set.distance]) scoreByDistance[set.distance] = {sum:0, count:0};
+      scoreByDistance[set.distance].sum += pct;
+      scoreByDistance[set.distance].count += 1;
+    });
+  });
+  const scoreByDistanceList = Object.keys(scoreByDistance).map(Number).sort((a,b)=>a-b).map(d=>({
+    distance:d, avgPct: scoreByDistance[d].sum/scoreByDistance[d].count, count: scoreByDistance[d].count
+  }));
 
   $app.innerHTML = `
     <div class="hdr"><h1>Impact Log</h1><div class="sub">GROUP TRACKER</div></div>
@@ -616,21 +721,40 @@ function renderHome(){
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Challenge Overview</span>
       <div class="stat-row">
-        <div class="stat"><div class="num" style="color:var(--amber)">${avgChallengePct!==null?fmt(avgChallengePct,0)+'%':'—'}</div><div class="cap">AVG SCORE (X excluded from possible)</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${avgChallengePct!==null?fmt(avgChallengePct,0)+'%':'—'}</div><div class="cap">AVG SCORE</div></div>
         <div class="stat"><div class="num" style="color:var(--olive)">${bestChallenge?fmt(bestChallenge.p.pct,0)+'%':'—'}</div><div class="cap">HIGH SCORE</div></div>
+      </div>
+      <div class="stat-row" style="margin-top:14px;">
+        <div class="stat"><div class="num" style="color:${currentStreak>0?'var(--olive)':'var(--text)'}">${currentStreak}</div><div class="cap">CURRENT STREAK</div></div>
+        <div class="stat"><div class="num">${daysSincePR!==null?daysSincePR:'—'}</div><div class="cap">DAYS SINCE PR</div></div>
       </div>
       ${bestChallenge ? `<div class="row-item" data-challenge-id="${bestChallenge.c.id}" style="margin-top:6px;">
         <div class="t2">${fmtDate(bestChallenge.c.date)}${bestChallenge.c.label?' · '+escapeHtml(bestChallenge.c.label):''}</div>
         <div class="metric">${bestChallenge.p.earned}<span class="u">/${bestChallenge.p.possible}</span></div>
-      </div>` : ''}
+      </div>
+      <button class="btn secondary small" id="rematchPrBtn" style="margin-top:8px;">Rematch My PR</button>` : ''}
       <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px;">
         <div class="stat-row">
           <div class="stat"><div class="num">${avgColdShot!==null?fmt(avgColdShot,1):'—'}</div><div class="cap">AVG COLD SHOT (/11)</div></div>
           <div class="stat"><div class="num" style="color:var(--olive)">${bestColdShot!==null?bestColdShot:'—'}</div><div class="cap">BEST COLD SHOT</div></div>
         </div>
+        <div class="stat-row" style="margin-top:10px;">
+          <div class="stat"><div class="num" style="color:${coldShotStreak>0?'var(--olive)':'var(--text)'}">${coldShotStreak}</div><div class="cap">COLD SHOT STREAK (9+)</div></div>
+        </div>
         ${bestColdShotChallenge ? `<div class="t2" style="margin-top:6px;">Best from ${fmtDate(bestColdShotChallenge.date)}</div>` : ''}
       </div>
     </div>
+
+    ${bestByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Personal Bests by Distance</span>
+      ${bestByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d} yd</div><div class="metric">${fmt(bestByDistance[d],1)}<span class="u">"</span></div></div>`).join('')}
+    </div>` : ''}
+
+    ${scoreByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Avg Challenge Score by Distance</span>
+      ${scoreByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d.distance} yd</div><div class="metric">${fmt(d.avgPct,0)}<span class="u">% · ${d.count} set${d.count!==1?'s':''}</span></div></div>`).join('')}
+    </div>` : ''}
+
 
     <div class="nav-row">
       <button class="btn" id="newSessionBtn">+ New Session</button>
@@ -642,6 +766,7 @@ function renderHome(){
     </div>
     <div class="nav-row">
       <button class="btn secondary" id="newChallengeBtn">+ New Challenge</button>
+      <button class="btn secondary" id="viewAllChallengesBtn">View All Challenges</button>
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
@@ -668,7 +793,7 @@ function renderHome(){
           [...multi].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
             const t = challengeTotals(c);
             const aps = c.arrowsPerSet || 3;
-            const formatLabel = aps===1?'5 arrows':'5 sets of 3';
+            const formatLabel = c.fatigueLadder ? `Fatigue Ladder · ${aps} arrows` : (aps===1?'5 arrows':'5 sets of 3');
             return `<div class="row-item" data-challenge-id="${c.id}">
               <div><div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
               <div class="t2">6-ring challenge · ${formatLabel}</div></div>
@@ -758,8 +883,11 @@ function renderHome(){
   document.getElementById('equipTrendsBtn').onclick = ()=>{ view={screen:'equipmentTrends'}; render(); };
   document.getElementById('equipChangesBtn').onclick = ()=>{ view={screen:'equipmentChanges'}; render(); };
   document.getElementById('newChallengeBtn').onclick = startNewChallenge;
+  document.getElementById('viewAllChallengesBtn').onclick = ()=>{ view={screen:'challengeHistory'}; render(); };
   const oneArrowBtn = document.getElementById('oneArrowBtn');
   if(oneArrowBtn) oneArrowBtn.onclick = startOneArrowChallenge;
+  const rematchPrBtn = document.getElementById('rematchPrBtn');
+  if(rematchPrBtn) rematchPrBtn.onclick = ()=> startRematch(bestChallenge.c.id);
   document.querySelectorAll('[data-challenge-id]').forEach(el=>{
     el.onclick = ()=>{ view={screen:'challengeDetail', id:el.dataset.challengeId}; render(); };
   });
@@ -824,7 +952,7 @@ function startNewSession(){
 function startNewChallenge(){
   flow = {
     mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
-    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:3, totalSets:5, oneArrowMode:false,
+    bowId:null, arrowSetupId:null, label:'', ringWidth:1.5, arrowsPerSet:3, totalSets:5, oneArrowMode:false, fatigueLadder:false,
     sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
     challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null, centerOverridePx:null
   };
@@ -835,10 +963,10 @@ function startNewChallenge(){
 }
 async function startOneArrowChallenge(){
   const status = oneArrowCooldownStatus();
-  if(!status.ok){ await showAlert(`This challenge can only be attempted once every 24 hours. ${status.message}`); return; }
+  if(!status.ok){ await showAlert(`This challenge can only be attempted once per day. ${status.message}`); return; }
   flow = {
     mode:'newChallenge', step:'chooseTarget', assetDraft:null, targetId:null,
-    bowId:null, arrowSetupId:null, label:'', ringWidth:2, arrowsPerSet:1, totalSets:1, oneArrowMode:true,
+    bowId:null, arrowSetupId:null, label:'', ringWidth:1.5, arrowsPerSet:1, totalSets:1, oneArrowMode:true,
     sets:[], currentSet:1, impacts:[], selectedImpactIndex:null,
     challengeType:'fixed', fixedDistance:'', fixedCustomDistance:'', safeMaxYardage:'', setDistances:null, centerOverridePx:null
   };
@@ -890,7 +1018,7 @@ function renderFlow(){
     chooseTarget: flow.mode==='addTarget' ? 'Add target photo' : 'Choose target',
     calibrate:'Calibrate scale', center:'Set center', chooseEquipment:'Choose equipment', capture:'Log grouping', savedPrompt:'Grouping saved',
     nameBow:'Add bow', nameArrow:'Add arrow setup', editArrow:'Edit arrow setup',
-    ringWidth:'Set scoring rings', captureSet:`${flow.arrowsPerSet===1?'Arrow':'Set'} ${flow.currentSet||1} of ${flow.totalSets||5}`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format', oneArrowSafeMax:'Set safe max yardage', sessionCenter:'Center point for this session',
+    captureSet:`${flow.fatigueLadder?'Fatigue Ladder':(flow.arrowsPerSet===1?'Arrow':'Set')+' '+(flow.currentSet||1)+' of '+(flow.totalSets||5)}`, challengeSummary:'Challenge complete', challengeType:'Choose distance format', challengeFormat:'Choose challenge format', oneArrowSafeMax:'Set safe max yardage', sessionCenter:'Center point for this session', fatigueSetup:'Set up Fatigue Ladder',
     editTargetMain:'Edit target', editTargetCenterTap:'Change center point', editTargetCenterConfirm:'Confirm center change', editTargetCalibrate:'Add reference measurement'
   };
   $app.innerHTML = `
@@ -900,7 +1028,7 @@ function renderFlow(){
   `;
   document.getElementById('closeFlow').onclick = async ()=>{
     if(flow.step==='savedPrompt' || flow.step==='challengeSummary'){ cancelFlow(); return; }
-    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','ringWidth','challengeType','challengeFormat','oneArrowSafeMax','sessionCenter','editTargetMain','editTargetCenterTap','editTargetCenterConfirm','editTargetCalibrate'];
+    const trivialSteps = ['nameBow','nameArrow','chooseEquipment','chooseTarget','editArrow','challengeType','challengeFormat','oneArrowSafeMax','sessionCenter','editTargetMain','editTargetCenterTap','editTargetCenterConfirm','editTargetCalibrate','fatigueSetup'];
     const isTrivial = trivialSteps.includes(flow.step);
     if(!isTrivial && !(await showConfirm('Discard unsaved changes?', {confirmLabel:'Discard'}))) return;
     if(flow.returnFlow){ flow = flow.returnFlow; view={screen:'newSession'}; render(); }
@@ -924,7 +1052,7 @@ function renderFlow(){
   else if(flow.step==='editTargetCalibrate') renderEditTargetCalibrateStep(body);
   else if(flow.step==='oneArrowSafeMax') renderOneArrowSafeMaxStep(body);
   else if(flow.step==='challengeType') renderChallengeTypeStep(body);
-  else if(flow.step==='ringWidth') renderRingWidthStep(body);
+  else if(flow.step==='fatigueSetup') renderFatigueSetupStep(body);
   else if(flow.step==='captureSet') renderCaptureSetStep(body);
   else if(flow.step==='challengeSummary') renderChallengeSummaryStep(body);
 }
@@ -1543,9 +1671,10 @@ function randomIntInRange(min, max){
 function renderChallengeFormatStep(body){
   const formats = [
     {key:'3', label:'5 Sets of 3 (15 arrows)', desc:'Classic format — 5 sets, 3 arrows each, scored per arrow.'},
-    {key:'1', label:'5 Arrows', desc:'Just 5 single arrows total, scored per arrow.'}
+    {key:'1', label:'5 Arrows', desc:'Just 5 single arrows total, scored per arrow.'},
+    {key:'fatigue', label:'Fatigue Ladder (20-30 arrows)', desc:'One continuous group at a single distance — see how much you open up as you tire.'}
   ];
-  const selectedKey = String(flow.arrowsPerSet);
+  const selectedKey = flow.fatigueLadder ? 'fatigue' : String(flow.arrowsPerSet);
   body.innerHTML = `
     <p class="instr">Choose the challenge format.</p>
     <div class="chip-row" id="formatChips" style="flex-direction:column;align-items:stretch;">
@@ -1559,12 +1688,16 @@ function renderChallengeFormatStep(body){
   `;
   document.querySelectorAll('#formatChips .chip').forEach(c=>{
     c.onclick = ()=>{
-      flow.arrowsPerSet = parseInt(c.dataset.format);
-      flow.totalSets = 5;
+      const key = c.dataset.format;
+      if(key==='fatigue'){ flow.fatigueLadder = true; flow.arrowsPerSet = flow.arrowsPerSet>=20?flow.arrowsPerSet:20; flow.totalSets = 1; }
+      else { flow.fatigueLadder = false; flow.arrowsPerSet = parseInt(key); flow.totalSets = 5; }
       renderChallengeFormatStep(body);
     };
   });
-  document.getElementById('formatContinueBtn').onclick = ()=>{ flow.step = 'challengeType'; render(); };
+  document.getElementById('formatContinueBtn').onclick = ()=>{
+    flow.step = flow.fatigueLadder ? 'fatigueSetup' : 'challengeType';
+    render();
+  };
 }
 function renderOneArrowSafeMaxStep(body){
   body.innerHTML = `
@@ -1580,7 +1713,35 @@ function renderOneArrowSafeMaxStep(body){
     const d = randomIntInRange(15, safeMax);
     flow.setDistances = [d];
     await showAlert(`Distance for this attempt: ${d} yards.`);
-    flow.step = 'ringWidth';
+    flow.step = 'captureSet';
+    render();
+  };
+}
+function renderFatigueSetupStep(body){
+  body.innerHTML = `
+    <p class="instr">One continuous group, one distance. Pick how many arrows and how far.</p>
+    <label class="f-label">Number of arrows</label>
+    <div class="chip-row" id="countChips">
+      <button class="chip ${flow.arrowsPerSet===20?'active':''}" data-count="20">20 arrows</button>
+      <button class="chip ${flow.arrowsPerSet===30?'active':''}" data-count="30">30 arrows</button>
+    </div>
+    <label class="f-label" style="margin-top:14px;">Distance</label>
+    <select id="fatigueDistInput">${distanceOptions(flow.fixedDistance)}</select>
+    ${flow.fixedDistance==='custom' ? `<input type="number" id="fatigueCustomInput" step="0.5" placeholder="Enter exact yards" value="${flow.fixedCustomDistance||''}">` : ''}
+    <button class="btn" id="fatigueContinueBtn" style="margin-top:14px;">Continue</button>
+  `;
+  document.querySelectorAll('#countChips .chip').forEach(c=>{
+    c.onclick = ()=>{ flow.arrowsPerSet = parseInt(c.dataset.count); renderFatigueSetupStep(body); };
+  });
+  document.getElementById('fatigueDistInput').onchange = e=>{ flow.fixedDistance = e.target.value; renderFatigueSetupStep(body); };
+  const customInput = document.getElementById('fatigueCustomInput');
+  if(customInput) customInput.oninput = e=>{ flow.fixedCustomDistance = e.target.value; };
+  document.getElementById('fatigueContinueBtn').onclick = async ()=>{
+    const d = flow.fixedDistance==='custom' ? parseFloat(flow.fixedCustomDistance) : parseFloat(flow.fixedDistance);
+    if(!d || d<=0){ await showAlert('Select or enter a distance for this challenge.'); return; }
+    flow.setDistances = [d];
+    flow.totalSets = 1;
+    flow.step = 'captureSet';
     render();
   };
 }
@@ -1593,7 +1754,7 @@ function renderChallengeTypeStep(body){
     {key:'increasing', label:'Increasing by 10yd', desc:`5 ${unitPlural} at increasing distances, +10 yards each ${unit}.`},
     {key:'random', label:`Random each ${unit}`, desc:`Each of the 5 ${unitPlural} gets its own random distance.`}
   ];
-  const needsSafeMax = flow.challengeType==='increasing' || flow.challengeType==='random';
+  const needsSafeMax = flow.challengeType==='randomFixed' || flow.challengeType==='increasing' || flow.challengeType==='random';
   body.innerHTML = `
     <p class="instr">Choose how distance works for this challenge.</p>
     <div class="chip-row" id="typeChips" style="flex-direction:column;align-items:stretch;">
@@ -1611,7 +1772,7 @@ function renderChallengeTypeStep(body){
     ${needsSafeMax ? `
       <label class="f-label" style="margin-top:14px;">Safe max yardage</label>
       <input type="number" id="safeMaxInput" step="5" placeholder="e.g. 60" value="${flow.safeMaxYardage||''}">
-      <p class="instr" style="color:var(--muted);">${flow.challengeType==='increasing' ? 'Distances will increase by 10 yards per set, staying at or under this max.' : 'Each set gets its own random distance, capped at this max.'}</p>
+      <p class="instr" style="color:var(--muted);">${flow.challengeType==='increasing' ? 'Distances will increase by 10 yards per set, staying at or under this max.' : flow.challengeType==='randomFixed' ? 'One random distance (10 yards minimum) will be picked, capped at this max, and used for all 5.' : 'Each set gets its own random distance, capped at this max.'}</p>
     ` : ''}
     <button class="btn" id="typeContinueBtn" style="margin-top:14px;">Continue</button>
   `;
@@ -1631,7 +1792,9 @@ function renderChallengeTypeStep(body){
       if(!d || d<=0){ await showAlert('Select or enter a distance for this challenge.'); return; }
       flow.setDistances = Array(5).fill(d);
     } else if(flow.challengeType==='randomFixed'){
-      const d = randomMultipleInRange(5,100,5);
+      const safeMax = parseFloat(flow.safeMaxYardage);
+      if(!safeMax || safeMax<10){ await showAlert('Enter a safe max yardage of at least 10.'); return; }
+      const d = randomMultipleInRange(10, safeMax, 5);
       flow.setDistances = Array(5).fill(d);
       await showAlert(`Random distance chosen: ${d} yards for all 5 sets.`);
     } else if(flow.challengeType==='increasing'){
@@ -1646,21 +1809,6 @@ function renderChallengeTypeStep(body){
       flow.setDistances = [0,1,2,3,4].map(()=> randomMultipleInRange(10, safeMax, 5));
       await showAlert(`Distances for this challenge: ${flow.setDistances.join(', ')} yards.`);
     }
-    flow.step = 'ringWidth';
-    render();
-  };
-}
-function renderRingWidthStep(body){
-  body.innerHTML = `
-    <p class="instr">This challenge scores like a 6-ring target: <b>10, 9, 8, 7, 6, 5</b> points across six equal-width bands measured from center, plus an inner <b>X ring worth 11</b> within ${X_RADIUS_IN}" of dead center, then a miss (0) beyond the sixth band.</p>
-    <label class="f-label">Ring width (inches per band)</label>
-    <input type="number" id="ringWidthInput" step="0.1" value="${flow.ringWidth}">
-    <p class="instr" style="color:var(--muted);">Example: a 2" ring width means 0-${X_RADIUS_IN}" scores 11 (X), ${X_RADIUS_IN}"-2" scores 10, 2"-4" scores 9, and so on down to 5, with anything past 12" scoring 0.</p>
-    <button class="btn" id="startChallengeBtn">Start Challenge — Set 1 of 5</button>
-  `;
-  document.getElementById('ringWidthInput').oninput = e=>{ flow.ringWidth = parseFloat(e.target.value)||2; };
-  document.getElementById('startChallengeBtn').onclick = ()=>{
-    if(!flow.ringWidth || flow.ringWidth<=0){ flow.ringWidth = 2; }
     flow.step = 'captureSet';
     render();
   };
@@ -1694,7 +1842,7 @@ function renderCaptureSetStep(body){
     </div>
   `;
   const wrap = document.getElementById('tapWrap'); const svg = wrap.querySelector('svg');
-  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
+  drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx, flow.ringWidth);
   wrap.addEventListener('click', e=>{
     if(flow.impacts.length>=n) return;
     const rect = wrap.getBoundingClientRect();
@@ -1714,7 +1862,7 @@ function renderCaptureSetStep(body){
         const p = flow.impacts[flow.selectedImpactIndex];
         p.xPx = clamp(p.xPx+dx, 0, asset.imgW); p.yPx = clamp(p.yPx+dy, 0, asset.imgH);
         recomputeImpact(p, asset, flow.centerOverridePx);
-        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx);
+        drawCaptureState(svg, asset, flow.impacts, flow.selectedImpactIndex, flow.centerOverridePx, flow.ringWidth);
       });
     }
   }
@@ -1734,7 +1882,7 @@ function renderCaptureSetStep(body){
     } else {
       const challenge = {
         id: uid(), date: new Date().toISOString(), label: flow.label||'',
-        oneArrowMode: !!flow.oneArrowMode,
+        oneArrowMode: !!flow.oneArrowMode, fatigueLadder: !!flow.fatigueLadder, rematchOf: flow.rematchOf||null,
         targetId: flow.targetId, bowId: flow.bowId||null, arrowSetupId: flow.arrowSetupId||null, centerOverridePx: flow.centerOverridePx||null,
         ringWidth: flow.ringWidth, challengeType: flow.challengeType, arrowsPerSet: flow.arrowsPerSet, sets: flow.sets
       };
@@ -1752,7 +1900,8 @@ function renderChallengeSummaryStep(body){
   const asset = getAsset(challenge.targetId);
   const {x:cx,y:cy} = challenge.centerOverridePx || asset.centerPx;
   const r = impactRadiusPx(asset);
-  let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+  let dotsSvg = ringOverlaySvg(cx, cy, asset.pixelsPerInch, challenge.ringWidth);
+  dotsSvg += `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   challenge.sets.forEach((set,idx)=>{
     const color = PALETTE[idx%PALETTE.length];
@@ -1760,13 +1909,39 @@ function renderChallengeSummaryStep(body){
       dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
     });
   });
+  const rematchSource = challenge.rematchOf ? getChallenge(challenge.rematchOf) : null;
+  let compareHtml = '';
+  if(rematchSource){
+    const oldTotals = challengeTotals(rematchSource);
+    const delta = totals.total - oldTotals.total;
+    compareHtml = `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Rematch result</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num" style="color:var(--muted)">${oldTotals.total}</div><div class="cap">PREVIOUS · ${fmtDate(rematchSource.date)}</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">THIS ATTEMPT</div></div>
+        <div class="stat"><div class="num" style="color:${delta>=0?'var(--olive)':'var(--rust)'}">${delta>=0?'+':''}${delta}</div><div class="cap">CHANGE</div></div>
+      </div>
+    </div>`;
+  }
   body.innerHTML = `
+    ${compareHtml}
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Final score</span>
       <div class="stat-row">
         <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">/ ${totals.max} POINTS</div></div>
       </div>
     </div>
+    ${challenge.fatigueLadder ? (()=>{
+      const fb = fatigueBreakdown(challenge);
+      return `<div class="panel"><span class="bl"></span><span class="br"></span>
+        <span class="label">Fatigue breakdown — first ${fb.firstCount} vs last ${fb.secondCount}</span>
+        <div class="stat-row">
+          <div class="stat"><div class="num" style="color:var(--muted)">${fmt(fb.firstSpread,2)}"</div><div class="cap">FIRST HALF GROUP</div></div>
+          <div class="stat"><div class="num" style="color:var(--amber)">${fmt(fb.secondSpread,2)}"</div><div class="cap">SECOND HALF GROUP</div></div>
+          <div class="stat"><div class="num" style="color:${fb.deltaIn<=0?'var(--olive)':'var(--rust)'}">${fb.deltaIn>=0?'+':''}${fmt(fb.deltaIn,2)}"</div><div class="cap">FADE${fb.deltaPct!==null?' ('+(fb.deltaPct>=0?'+':'')+fmt(fb.deltaPct,0)+'%)':''}</div></div>
+        </div>
+      </div>`;
+    })() : ''}
     <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">By set</span>
@@ -1783,10 +1958,11 @@ function renderChallengeSummaryStep(body){
   `;
   document.getElementById('doneChallengeBtn').onclick = ()=>{ flow=null; view={screen:'home'}; render(); };
 }
-function drawCaptureState(svg, asset, impacts, selectedIdx, overrideCenterPx){
+function drawCaptureState(svg, asset, impacts, selectedIdx, overrideCenterPx, ringWidth){
   const {x:cx,y:cy} = overrideCenterPx || asset.centerPx;
   const r = impactRadiusPx(asset);
-  let s = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+  let s = ringWidth ? ringOverlaySvg(cx, cy, asset.pixelsPerInch, ringWidth) : '';
+  s += `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
            <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   impacts.forEach((p,i)=>{
     const isSel = i===selectedIdx;
@@ -2123,6 +2299,53 @@ function renderAllImpacts(){
 }
 
 // ---------- CHALLENGE DETAIL ----------
+// ---------- CHALLENGE HISTORY ----------
+let challengeHistoryFilter = 'all';
+function renderChallengeHistory(){
+  const filters = [
+    {key:'all', label:'All'},
+    {key:'3', label:'5 Sets of 3'},
+    {key:'1', label:'5 Arrows'},
+    {key:'fatigue', label:'Fatigue Ladder'},
+    {key:'cold', label:'Cold Shot'}
+  ];
+  const filtered = data.challenges.filter(c=>{
+    if(challengeHistoryFilter==='all') return true;
+    if(challengeHistoryFilter==='cold') return !!c.oneArrowMode;
+    if(challengeHistoryFilter==='fatigue') return !!c.fatigueLadder;
+    if(c.oneArrowMode || c.fatigueLadder) return false;
+    return String(c.arrowsPerSet||3)===challengeHistoryFilter;
+  });
+  const sorted = [...filtered].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">All Challenges</div><button class="close" id="closeDetail">‹ Back</button></div>
+    <div class="chip-row" id="historyFilterChips" style="margin-bottom:14px;">
+      ${filters.map(f=>`<button class="chip ${challengeHistoryFilter===f.key?'active':''}" data-filter="${f.key}">${f.label}</button>`).join('')}
+    </div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      ${sorted.length===0 ? '<div class="empty">No challenges match this filter.</div>' :
+        sorted.map(c=>{
+          const t = challengeTotals(c);
+          const aps = c.arrowsPerSet||3;
+          const formatLabel = c.oneArrowMode ? 'Cold Shot' : c.fatigueLadder ? `Fatigue Ladder · ${aps} arrows` : (aps===1?'5 Arrows':'5 Sets of 3');
+          return `<div class="row-item" data-challenge-id="${c.id}">
+            <div><div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
+            <div class="t2">${formatLabel}</div></div>
+            <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
+          </div>`;
+        }).join('')
+      }
+    </div>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.querySelectorAll('#historyFilterChips .chip').forEach(c=>{
+    c.onclick = ()=>{ challengeHistoryFilter = c.dataset.filter; renderChallengeHistory(); };
+  });
+  document.querySelectorAll('[data-challenge-id]').forEach(el=>{
+    el.onclick = ()=>{ view={screen:'challengeDetail', id:el.dataset.challengeId}; render(); };
+  });
+}
+
 function renderChallengeDetail(){
   const challenge = getChallenge(view.id);
   if(!challenge){ view={screen:'home'}; render(); return; }
@@ -2133,7 +2356,8 @@ function renderChallengeDetail(){
   const equipLabel = [bow?bow.name:null, arrow?arrow.name:null].filter(Boolean).join(' · ');
   const {x:cx,y:cy} = challenge.centerOverridePx || asset.centerPx;
   const r = impactRadiusPx(asset);
-  let dotsSvg = `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
+  let dotsSvg = ringOverlaySvg(cx, cy, asset.pixelsPerInch, challenge.ringWidth);
+  dotsSvg += `<line x1="${cx-14}" y1="${cy}" x2="${cx+14}" y2="${cy}" stroke="#E8A33D" stroke-width="1.5"/>
                  <line x1="${cx}" y1="${cy-14}" x2="${cx}" y2="${cy+14}" stroke="#E8A33D" stroke-width="1.5"/>`;
   challenge.sets.forEach((set,idx)=>{
     const color = PALETTE[idx%PALETTE.length];
@@ -2141,18 +2365,46 @@ function renderChallengeDetail(){
       dotsSvg += `<circle cx="${p.xPx}" cy="${p.yPx}" r="${r}" fill="${color}" fill-opacity="0.9" stroke="#12140F" stroke-width="1.5"/>`;
     });
   });
+  const rematchSource = challenge.rematchOf ? getChallenge(challenge.rematchOf) : null;
+  let compareHtml = '';
+  if(rematchSource){
+    const oldTotals = challengeTotals(rematchSource);
+    const delta = totals.total - oldTotals.total;
+    compareHtml = `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Rematch result</span>
+      <div class="stat-row">
+        <div class="stat"><div class="num" style="color:var(--muted)">${oldTotals.total}</div><div class="cap">PREVIOUS · ${fmtDate(rematchSource.date)}</div></div>
+        <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">THIS ATTEMPT</div></div>
+        <div class="stat"><div class="num" style="color:${delta>=0?'var(--olive)':'var(--rust)'}">${delta>=0?'+':''}${delta}</div><div class="cap">CHANGE</div></div>
+      </div>
+    </div>`;
+  }
+  const bestMulti = getBestMultiChallenge();
+  const bestCold = getBestColdShotChallenge();
   $app.innerHTML = `
     <div class="flow-hdr">
       <div class="step-label">${fmtDate(challenge.date)}${challenge.label?' · '+escapeHtml(challenge.label):''}</div>
       <button class="close" id="closeDetail">‹ Back</button>
     </div>
     ${equipLabel ? `<div class="instr" style="margin-bottom:8px;">${escapeHtml(equipLabel)}</div>` : ''}
+    ${compareHtml}
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <div class="stat-row">
         <div class="stat"><div class="num" style="color:var(--amber)">${totals.total}</div><div class="cap">/ ${totals.max} POINTS</div></div>
         <div class="stat"><div class="num">${challenge.ringWidth}"</div><div class="cap">RING WIDTH</div></div>
       </div>
     </div>
+    ${challenge.fatigueLadder ? (()=>{
+      const fb = fatigueBreakdown(challenge);
+      return `<div class="panel"><span class="bl"></span><span class="br"></span>
+        <span class="label">Fatigue breakdown — first ${fb.firstCount} vs last ${fb.secondCount}</span>
+        <div class="stat-row">
+          <div class="stat"><div class="num" style="color:var(--muted)">${fmt(fb.firstSpread,2)}"</div><div class="cap">FIRST HALF GROUP</div></div>
+          <div class="stat"><div class="num" style="color:var(--amber)">${fmt(fb.secondSpread,2)}"</div><div class="cap">SECOND HALF GROUP</div></div>
+          <div class="stat"><div class="num" style="color:${fb.deltaIn<=0?'var(--olive)':'var(--rust)'}">${fb.deltaIn>=0?'+':''}${fmt(fb.deltaIn,2)}"</div><div class="cap">FADE${fb.deltaPct!==null?' ('+(fb.deltaPct>=0?'+':'')+fmt(fb.deltaPct,0)+'%)':''}</div></div>
+        </div>
+      </div>`;
+    })() : ''}
     <div class="tap-wrap"><img src="${asset.dataUrl}"><svg viewBox="0 0 ${asset.imgW} ${asset.imgH}">${dotsSvg}</svg></div>
     <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">${challenge.oneArrowMode ? 'Result' : 'By set'}</span>
@@ -2167,9 +2419,17 @@ function renderChallengeDetail(){
         </div>`;
       }).join('')}
     </div>
+    <button class="btn" id="rematchBtn" style="margin-bottom:8px;">Rematch This Challenge</button>
+    ${!challenge.oneArrowMode && bestMulti && bestMulti.c.id!==challenge.id ? `<button class="btn secondary" id="rematchPrDetailBtn" style="margin-bottom:8px;">Rematch My PR</button>` : ''}
+    ${challenge.oneArrowMode && bestCold && bestCold.id!==challenge.id ? `<button class="btn secondary" id="rematchBestColdBtn" style="margin-bottom:8px;">Rematch My Best Cold Shot</button>` : ''}
     <button class="btn danger" id="deleteChallengeBtn">Delete challenge</button>
   `;
   document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.getElementById('rematchBtn').onclick = ()=> startRematch(challenge.id);
+  const rematchPrDetailBtn = document.getElementById('rematchPrDetailBtn');
+  if(rematchPrDetailBtn) rematchPrDetailBtn.onclick = ()=> startRematch(bestMulti.c.id);
+  const rematchBestColdBtn = document.getElementById('rematchBestColdBtn');
+  if(rematchBestColdBtn) rematchBestColdBtn.onclick = ()=> startRematch(bestCold.id);
   document.getElementById('deleteChallengeBtn').onclick = async ()=>{
     if(!(await showConfirm('Delete this challenge? This cannot be undone.'))) return;
     data.challenges = data.challenges.filter(c=>c.id!==challenge.id);
