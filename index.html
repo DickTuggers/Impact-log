@@ -549,6 +549,7 @@ function render(){
   else if(view.screen==='equipmentChanges') renderEquipmentChanges();
   else if(view.screen==='challengeDetail') renderChallengeDetail();
   else if(view.screen==='challengeHistory') renderChallengeHistory();
+  else if(view.screen==='sessionHistory') renderSessionHistory();
 }
 
 function renderAvgImpactSvg(flatImpacts){
@@ -606,12 +607,11 @@ function renderHome(){
   const flatGroupings = [];
   matchingSessions.forEach(s=> (s.groupings||[]).forEach(g=> flatGroupings.push({session:s, grouping:g})));
   flatGroupings.sort((a,b)=> new Date(a.grouping.createdAt)-new Date(b.grouping.createdAt));
-  const totalImpacts = flatGroupings.reduce((a,x)=>a+(x.grouping.impacts?.length||0),0);
   let best = null, bestDistance = null;
   const spreadValues = [];
   flatGroupings.forEach(({grouping})=>{
     const m = groupingMetrics(grouping);
-    if(m.count>=2){
+    if(m.count>=3){
       spreadValues.push(m.extremeSpread);
       if(best===null || m.extremeSpread<best){ best = m.extremeSpread; bestDistance = grouping.distance; }
     }
@@ -620,7 +620,7 @@ function renderHome(){
   const bestByDistance = {};
   flatGroupings.forEach(({grouping})=>{
     const m = groupingMetrics(grouping);
-    if(m.count>=2 && grouping.distance!=null){
+    if(m.count>=3 && grouping.distance!=null){
       if(!bestByDistance[grouping.distance] || m.extremeSpread<bestByDistance[grouping.distance]) bestByDistance[grouping.distance]=m.extremeSpread;
     }
   });
@@ -629,6 +629,11 @@ function renderHome(){
   matchingSessions.forEach(s=> (s.groupings||[]).forEach(g=> (g.impacts||[]).forEach(p=>{
     flatImpacts.push({...p, distance:g.distance, sessionId:s.id, groupingId:g.id, date:s.date});
   })));
+  challengesMatchingHomeFilter().forEach(c=> (c.sets||[]).forEach(set=> (set.arrows||[]).forEach(p=>{
+    flatImpacts.push({...p, distance:set.distance, challengeId:c.id, date:c.date});
+  })));
+  const totalImpacts = flatGroupings.reduce((a,x)=>a+(x.grouping.impacts?.length||0),0)
+    + challengesMatchingHomeFilter().reduce((a,c)=>a+(c.sets||[]).reduce((b,set)=>b+(set.arrows?.length||0),0),0);
   const avgDistFromCenter = flatImpacts.length ? flatImpacts.reduce((a,p)=>a+p.distIn,0)/flatImpacts.length : null;
   const avgImpactSvg = renderAvgImpactSvg(flatImpacts);
   const arrowOptions = homeFilterBow!=='all' ? arrowsForBow(homeFilterBow) : [];
@@ -714,11 +719,6 @@ function renderHome(){
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Average impact</span>
-      ${avgImpactSvg}
-    </div>
-
-    <div class="panel"><span class="bl"></span><span class="br"></span>
       <span class="label">Challenge Overview</span>
       <div class="stat-row">
         <div class="stat"><div class="num" style="color:var(--amber)">${avgChallengePct!==null?fmt(avgChallengePct,0)+'%':'—'}</div><div class="cap">AVG SCORE</div></div>
@@ -745,17 +745,6 @@ function renderHome(){
       </div>
     </div>
 
-    ${bestByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Personal Bests by Distance</span>
-      ${bestByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d} yd</div><div class="metric">${fmt(bestByDistance[d],1)}<span class="u">"</span></div></div>`).join('')}
-    </div>` : ''}
-
-    ${scoreByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Avg Challenge Score by Distance</span>
-      ${scoreByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d.distance} yd</div><div class="metric">${fmt(d.avgPct,0)}<span class="u">% · ${d.count} set${d.count!==1?'s':''}</span></div></div>`).join('')}
-    </div>` : ''}
-
-
     <div class="nav-row">
       <button class="btn" id="newSessionBtn">+ New Session</button>
       <button class="btn secondary" id="allImpactsBtn">View All Impacts</button>
@@ -767,41 +756,6 @@ function renderHome(){
     <div class="nav-row">
       <button class="btn secondary" id="newChallengeBtn">+ New Challenge</button>
       <button class="btn secondary" id="viewAllChallengesBtn">View All Challenges</button>
-    </div>
-
-    <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Sessions</span>
-      <div>
-        ${sortedSessions.length===0 ? '<div class="empty">No sessions match this filter.</div>' :
-          sortedSessions.map(s=>{
-            const gCount = (s.groupings||[]).length;
-            const shotCount = (s.groupings||[]).reduce((a,g)=>a+(g.impacts?.length||0),0);
-            return `<div class="row-item" data-id="${s.id}">
-              <div><div class="t1">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
-              <div class="t2">${gCount} grouping${gCount!==1?'s':''} · ${shotCount} shot${shotCount!==1?'s':''}</div></div>
-              <div class="metric">›</div>
-            </div>`;
-          }).join('')}
-      </div>
-    </div>
-
-    <div class="panel"><span class="bl"></span><span class="br"></span>
-      <span class="label">Challenges</span>
-      <div>
-        ${(()=>{ const multi = data.challenges.filter(c=>!c.oneArrowMode);
-          return multi.length===0 ? '<div class="empty">No challenges completed yet.</div>' :
-          [...multi].sort((a,b)=>new Date(b.date)-new Date(a.date)).map(c=>{
-            const t = challengeTotals(c);
-            const aps = c.arrowsPerSet || 3;
-            const formatLabel = c.fatigueLadder ? `Fatigue Ladder · ${aps} arrows` : (aps===1?'5 arrows':'5 sets of 3');
-            return `<div class="row-item" data-challenge-id="${c.id}">
-              <div><div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
-              <div class="t2">6-ring challenge · ${formatLabel}</div></div>
-              <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
-            </div>`;
-          }).join('');
-        })()}
-      </div>
     </div>
 
     <div class="panel"><span class="bl"></span><span class="br"></span>
@@ -825,6 +779,56 @@ function renderHome(){
             </div>`;
           }).join('');
         })()}
+      </div>
+    </div>
+
+    ${scoreByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Avg Challenge Score by Distance</span>
+      ${scoreByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d.distance} yd</div><div class="metric">${fmt(d.avgPct,0)}<span class="u">% · ${d.count} set${d.count!==1?'s':''}</span></div></div>`).join('')}
+    </div>` : ''}
+
+    ${bestByDistanceList.length ? `<div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Personal Bests by Distance</span>
+      ${bestByDistanceList.map(d=>`<div class="row-item" style="cursor:default;"><div class="t1">${d} yd</div><div class="metric">${fmt(bestByDistance[d],1)}<span class="u">"</span></div></div>`).join('')}
+    </div>` : ''}
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <span class="label">Average impact</span>
+      ${avgImpactSvg}
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="label" style="margin-bottom:0;">Challenges</span>
+        <button class="btn ghost" id="viewPastChallengesBtn" style="font-size:10px;padding:2px 0;">View past challenges</button>
+      </div>
+      <div>
+        ${(()=>{ const multi = data.challenges.filter(c=>!c.oneArrowMode);
+          if(multi.length===0) return '<div class="empty">No challenges yet.</div>';
+          return [...multi].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,3).map(c=>{
+            const t = challengeTotals(c);
+            return `<div class="row-item" data-challenge-id="${c.id}">
+              <div class="t1">${fmtDate(c.date)}${c.label?' · '+escapeHtml(c.label):''}</div>
+              <div class="metric">${t.total}<span class="u">/${t.max}</span></div>
+            </div>`;
+          }).join('');
+        })()}
+      </div>
+    </div>
+
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span class="label" style="margin-bottom:0;">Sessions</span>
+        <button class="btn ghost" id="viewPastSessionsBtn" style="font-size:10px;padding:2px 0;">View past sessions</button>
+      </div>
+      <div>
+        ${sortedSessions.length===0 ? '<div class="empty">No sessions yet.</div>' :
+          sortedSessions.slice(0,3).map(s=>{
+            return `<div class="row-item" data-id="${s.id}">
+              <div class="t1">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
+              <div class="metric">›</div>
+            </div>`;
+          }).join('')}
       </div>
     </div>
 
@@ -884,6 +888,8 @@ function renderHome(){
   document.getElementById('equipChangesBtn').onclick = ()=>{ view={screen:'equipmentChanges'}; render(); };
   document.getElementById('newChallengeBtn').onclick = startNewChallenge;
   document.getElementById('viewAllChallengesBtn').onclick = ()=>{ view={screen:'challengeHistory'}; render(); };
+  document.getElementById('viewPastChallengesBtn').onclick = ()=>{ view={screen:'challengeHistory'}; render(); };
+  document.getElementById('viewPastSessionsBtn').onclick = ()=>{ view={screen:'sessionHistory'}; render(); };
   const oneArrowBtn = document.getElementById('oneArrowBtn');
   if(oneArrowBtn) oneArrowBtn.onclick = startOneArrowChallenge;
   const rematchPrBtn = document.getElementById('rematchPrBtn');
@@ -1751,10 +1757,12 @@ function renderChallengeTypeStep(body){
   const types = [
     {key:'fixed', label:'One distance I choose', desc:`All 5 ${unitPlural} shot at a single distance you pick.`},
     {key:'randomFixed', label:'One random distance', desc:`The app picks one random distance; all 5 ${unitPlural} use it.`},
-    {key:'increasing', label:'Increasing by 10yd', desc:`5 ${unitPlural} at increasing distances, +10 yards each ${unit}.`},
+    {key:'ladderUp', label:'Ladder Up', desc:`5 ${unitPlural}, +10 yards each ${unit} from your starting distance.`},
+    {key:'ladderDown', label:'Ladder Down', desc:`5 ${unitPlural}, -10 yards each ${unit} from your starting distance.`},
     {key:'random', label:`Random each ${unit}`, desc:`Each of the 5 ${unitPlural} gets its own random distance.`}
   ];
-  const needsSafeMax = flow.challengeType==='randomFixed' || flow.challengeType==='increasing' || flow.challengeType==='random';
+  const needsSafeMax = flow.challengeType==='randomFixed' || flow.challengeType==='random';
+  const needsStart = flow.challengeType==='ladderUp' || flow.challengeType==='ladderDown';
   body.innerHTML = `
     <p class="instr">Choose how distance works for this challenge.</p>
     <div class="chip-row" id="typeChips" style="flex-direction:column;align-items:stretch;">
@@ -1769,10 +1777,14 @@ function renderChallengeTypeStep(body){
       <select id="fixedDistInput">${distanceOptions(flow.fixedDistance)}</select>
       ${flow.fixedDistance==='custom' ? `<input type="number" id="fixedCustomInput" step="0.5" placeholder="Enter exact yards" value="${flow.fixedCustomDistance||''}">` : ''}
     ` : ''}
+    ${needsStart ? `
+      <label class="f-label" style="margin-top:14px;">Starting distance</label>
+      <select id="fixedDistInput">${distanceOptions(flow.fixedDistance)}</select>
+      ${flow.fixedDistance==='custom' ? `<input type="number" id="fixedCustomInput" step="0.5" placeholder="Enter exact yards" value="${flow.fixedCustomDistance||''}">` : ''}
+    ` : ''}
     ${needsSafeMax ? `
       <label class="f-label" style="margin-top:14px;">Safe max yardage</label>
       <input type="number" id="safeMaxInput" step="5" placeholder="e.g. 60" value="${flow.safeMaxYardage||''}">
-      <p class="instr" style="color:var(--muted);">${flow.challengeType==='increasing' ? 'Distances will increase by 10 yards per set, staying at or under this max.' : flow.challengeType==='randomFixed' ? 'One random distance (10 yards minimum) will be picked, capped at this max, and used for all 5.' : 'Each set gets its own random distance, capped at this max.'}</p>
     ` : ''}
     <button class="btn" id="typeContinueBtn" style="margin-top:14px;">Continue</button>
   `;
@@ -1789,25 +1801,25 @@ function renderChallengeTypeStep(body){
   document.getElementById('typeContinueBtn').onclick = async ()=>{
     if(flow.challengeType==='fixed'){
       const d = flow.fixedDistance==='custom' ? parseFloat(flow.fixedCustomDistance) : parseFloat(flow.fixedDistance);
-      if(!d || d<=0){ await showAlert('Select or enter a distance for this challenge.'); return; }
+      if(!d || d<=0){ await showAlert('Select or enter a distance.'); return; }
       flow.setDistances = Array(5).fill(d);
     } else if(flow.challengeType==='randomFixed'){
       const safeMax = parseFloat(flow.safeMaxYardage);
       if(!safeMax || safeMax<10){ await showAlert('Enter a safe max yardage of at least 10.'); return; }
-      const d = randomMultipleInRange(10, safeMax, 5);
-      flow.setDistances = Array(5).fill(d);
-      await showAlert(`Random distance chosen: ${d} yards for all 5 sets.`);
-    } else if(flow.challengeType==='increasing'){
-      const safeMax = parseFloat(flow.safeMaxYardage);
-      if(!safeMax || safeMax<45){ await showAlert('Enter a safe max yardage of at least 45 (since sets increase by 10 yards, five times, starting from at least 5).'); return; }
-      const start = randomMultipleInRange(5, safeMax-40, 5);
+      flow.setDistances = Array(5).fill(randomMultipleInRange(10, safeMax, 5));
+    } else if(flow.challengeType==='ladderUp'){
+      const start = flow.fixedDistance==='custom' ? parseFloat(flow.fixedCustomDistance) : parseFloat(flow.fixedDistance);
+      if(!start || start<=0){ await showAlert('Select or enter a starting distance.'); return; }
       flow.setDistances = [0,1,2,3,4].map(i=> start + i*10);
-      await showAlert(`Distances for this challenge: ${flow.setDistances.join(', ')} yards.`);
+    } else if(flow.challengeType==='ladderDown'){
+      const start = flow.fixedDistance==='custom' ? parseFloat(flow.fixedCustomDistance) : parseFloat(flow.fixedDistance);
+      if(!start || start<=0){ await showAlert('Select or enter a starting distance.'); return; }
+      if(start-40<5){ await showAlert('Starting distance must be at least 45 yards, so five 10-yard steps down stay at or above 5.'); return; }
+      flow.setDistances = [0,1,2,3,4].map(i=> start - i*10);
     } else if(flow.challengeType==='random'){
       const safeMax = parseFloat(flow.safeMaxYardage);
       if(!safeMax || safeMax<10){ await showAlert('Enter a safe max yardage of at least 10.'); return; }
       flow.setDistances = [0,1,2,3,4].map(()=> randomMultipleInRange(10, safeMax, 5));
-      await showAlert(`Distances for this challenge: ${flow.setDistances.join(', ')} yards.`);
     }
     flow.step = 'captureSet';
     render();
@@ -2301,6 +2313,31 @@ function renderAllImpacts(){
 // ---------- CHALLENGE DETAIL ----------
 // ---------- CHALLENGE HISTORY ----------
 let challengeHistoryFilter = 'all';
+// ---------- SESSION HISTORY ----------
+function renderSessionHistory(){
+  const sorted = [...data.sessions].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  $app.innerHTML = `
+    <div class="flow-hdr"><div class="step-label">All Sessions</div><button class="close" id="closeDetail">‹ Back</button></div>
+    <div class="panel"><span class="bl"></span><span class="br"></span>
+      ${sorted.length===0 ? '<div class="empty">No sessions yet.</div>' :
+        sorted.map(s=>{
+          const gCount = (s.groupings||[]).length;
+          const shotCount = (s.groupings||[]).reduce((a,g)=>a+(g.impacts?.length||0),0);
+          return `<div class="row-item" data-id="${s.id}">
+            <div><div class="t1">${fmtDate(s.date)}${s.label?' · '+escapeHtml(s.label):''}</div>
+            <div class="t2">${gCount} grouping${gCount!==1?'s':''} · ${shotCount} shot${shotCount!==1?'s':''}</div></div>
+            <div class="metric">›</div>
+          </div>`;
+        }).join('')
+      }
+    </div>
+  `;
+  document.getElementById('closeDetail').onclick = ()=>{ view={screen:'home'}; render(); };
+  document.querySelectorAll('[data-id]').forEach(el=>{
+    el.onclick = ()=>{ view={screen:'sessionDetail', id:el.dataset.id}; render(); };
+  });
+}
+
 function renderChallengeHistory(){
   const filters = [
     {key:'all', label:'All'},
